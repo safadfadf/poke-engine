@@ -6,7 +6,9 @@ use std::collections::HashSet;
 use poke_engine::choices::{Choices, MoveCategory, MOVES};
 use poke_engine::engine::abilities::Abilities;
 use poke_engine::engine::generate_instructions::{
-    calculate_both_damage_rolls, generate_instructions_from_move_pair,
+    calculate_both_damage_roll_ranges, calculate_both_damage_rolls,
+    calculate_both_damage_roll_ranges_with_choices, calculate_both_damage_rolls_with_choices,
+    generate_instructions_from_move_pair,
 };
 use poke_engine::engine::items::Items;
 use poke_engine::engine::state::{MoveChoice, PokemonVolatileStatus, Terrain, Weather};
@@ -1082,10 +1084,158 @@ fn calculate_damage(
     Ok((s1_py_rolls, s2_py_rolls))
 }
 
+#[pyfunction]
+fn calculate_damage_with_choices(
+    py_state: PyState,
+    side_one_move: String,
+    side_two_move: String,
+    side_one_moves_first: bool,
+) -> PyResult<(Vec<i16>, Vec<i16>)> {
+    let state: State = py_state.into();
+    let s1_move = MoveChoice::from_string(&side_one_move, &state.side_one).ok_or_else(|| {
+        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+            "Invalid move for s1: {}",
+            side_one_move
+        ))
+    })?;
+    let s2_move = MoveChoice::from_string(&side_two_move, &state.side_two).ok_or_else(|| {
+        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+            "Invalid move for s2: {}",
+            side_two_move
+        ))
+    })?;
+
+    let (s1_damage_rolls, s2_damage_rolls) = calculate_both_damage_rolls_with_choices(
+        &state,
+        &s1_move,
+        &s2_move,
+        side_one_moves_first,
+    );
+
+    Ok((
+        s1_damage_rolls.unwrap_or_else(|| vec![0, 0]),
+        s2_damage_rolls.unwrap_or_else(|| vec![0, 0]),
+    ))
+}
+
+#[pyfunction]
+fn calculate_damage_range(
+    py_state: PyState,
+    side_one_move: String,
+    side_two_move: String,
+    side_one_moves_first: bool,
+) -> PyResult<((i16, i16, i16, i16), (i16, i16, i16, i16))> {
+    let state: State = py_state.into();
+    let (mut s1_choice, mut s2_choice);
+    match MOVES.get(&Choices::from_str(side_one_move.as_str()).unwrap()) {
+        Some(m) => s1_choice = m.to_owned(),
+        None => {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "Invalid move for s1: {}",
+                side_one_move
+            )))
+        }
+    }
+    match MOVES.get(&Choices::from_str(side_two_move.as_str()).unwrap()) {
+        Some(m) => s2_choice = m.to_owned(),
+        None => {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "Invalid move for s2: {}",
+                side_one_move
+            )))
+        }
+    }
+    if side_one_move == "switch" {
+        s1_choice.category = MoveCategory::Switch
+    }
+    if side_two_move == "switch" {
+        s2_choice.category = MoveCategory::Switch
+    }
+    let ((s1_min_rolls, s1_max_rolls), (s2_min_rolls, s2_max_rolls)) =
+        calculate_both_damage_roll_ranges(&state, s1_choice, s2_choice, side_one_moves_first);
+
+    let s1_min = match s1_min_rolls {
+        Some(rolls) if rolls.len() >= 2 => (rolls[0], rolls[1]),
+        _ => (0, 0),
+    };
+    let s2_min = match s2_min_rolls {
+        Some(rolls) if rolls.len() >= 2 => (rolls[0], rolls[1]),
+        _ => (0, 0),
+    };
+    let s1_max = match s1_max_rolls {
+        Some(rolls) if rolls.len() >= 2 => (rolls[0], rolls[1]),
+        _ => (0, 0),
+    };
+    let s2_max = match s2_max_rolls {
+        Some(rolls) if rolls.len() >= 2 => (rolls[0], rolls[1]),
+        _ => (0, 0),
+    };
+
+    Ok((
+        (s1_min.0, s1_max.0, s1_min.1, s1_max.1),
+        (s2_min.0, s2_max.0, s2_min.1, s2_max.1),
+    ))
+}
+
+#[pyfunction]
+fn calculate_damage_range_with_choices(
+    py_state: PyState,
+    side_one_move: String,
+    side_two_move: String,
+    side_one_moves_first: bool,
+) -> PyResult<((i16, i16, i16, i16), (i16, i16, i16, i16))> {
+    let state: State = py_state.into();
+    let s1_move = MoveChoice::from_string(&side_one_move, &state.side_one).ok_or_else(|| {
+        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+            "Invalid move for s1: {}",
+            side_one_move
+        ))
+    })?;
+    let s2_move = MoveChoice::from_string(&side_two_move, &state.side_two).ok_or_else(|| {
+        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+            "Invalid move for s2: {}",
+            side_two_move
+        ))
+    })?;
+
+    let ((s1_min_rolls, s1_max_rolls), (s2_min_rolls, s2_max_rolls)) =
+        calculate_both_damage_roll_ranges_with_choices(
+            &state,
+            &s1_move,
+            &s2_move,
+            side_one_moves_first,
+        );
+
+    let s1_min = match s1_min_rolls {
+        Some(rolls) if rolls.len() >= 2 => (rolls[0], rolls[1]),
+        _ => (0, 0),
+    };
+    let s2_min = match s2_min_rolls {
+        Some(rolls) if rolls.len() >= 2 => (rolls[0], rolls[1]),
+        _ => (0, 0),
+    };
+    let s1_max = match s1_max_rolls {
+        Some(rolls) if rolls.len() >= 2 => (rolls[0], rolls[1]),
+        _ => (0, 0),
+    };
+    let s2_max = match s2_max_rolls {
+        Some(rolls) if rolls.len() >= 2 => (rolls[0], rolls[1]),
+        _ => (0, 0),
+    };
+
+    Ok((
+        (s1_min.0, s1_max.0, s1_min.1, s1_max.1),
+        (s2_min.0, s2_max.0, s2_min.1, s2_max.1),
+    ))
+}
+
 #[pymodule]
 #[pyo3(name = "poke_engine")]
 fn py_poke_engine(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(calculate_damage, m)?)?;
+    m.add_function(wrap_pyfunction!(calculate_damage_with_choices, m)?)?;
+    m.add_function(wrap_pyfunction!(calculate_damage_range, m)?)?;
+    m.add_function(wrap_pyfunction!(calculate_damage_range_with_choices, m)?)?;
     m.add_function(wrap_pyfunction!(generate_instructions, m)?)?;
     m.add_function(wrap_pyfunction!(id, m)?)?;
     m.add_function(wrap_pyfunction!(mcts, m)?)?;

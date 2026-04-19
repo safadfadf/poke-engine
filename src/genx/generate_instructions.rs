@@ -4065,11 +4065,12 @@ pub fn generate_instructions_from_move_pair(
     state_instructions_vec
 }
 
-pub fn calculate_damage_rolls(
+fn calculate_damage_rolls_with_mode(
     mut state: State,
     attacking_side_ref: &SideReference,
     mut choice: Choice,
     mut defending_choice: &Choice,
+    damage_rolls: DamageRolls,
 ) -> Option<Vec<i16>> {
     let mut incoming_instructions = StateInstructions::default();
 
@@ -4152,7 +4153,7 @@ pub fn calculate_damage_rolls(
 
     let mut return_vec = Vec::with_capacity(4);
     if let Some((damage, crit_damage)) =
-        calculate_damage(&state, attacking_side_ref, &choice, DamageRolls::Max)
+        calculate_damage(&state, attacking_side_ref, &choice, damage_rolls)
     {
         return_vec.push(damage);
         return_vec.push(crit_damage);
@@ -4160,6 +4161,21 @@ pub fn calculate_damage_rolls(
     } else {
         None
     }
+}
+
+pub fn calculate_damage_rolls(
+    state: State,
+    attacking_side_ref: &SideReference,
+    choice: Choice,
+    defending_choice: &Choice,
+) -> Option<Vec<i16>> {
+    calculate_damage_rolls_with_mode(
+        state,
+        attacking_side_ref,
+        choice,
+        defending_choice,
+        DamageRolls::Max,
+    )
 }
 
 pub fn calculate_both_damage_rolls(
@@ -4190,6 +4206,288 @@ pub fn calculate_both_damage_rolls(
     );
 
     (damages_dealt_s1, damages_dealt_s2)
+}
+
+fn choice_from_move_choice(state: &State, side_ref: SideReference, move_choice: &MoveChoice) -> Option<Choice> {
+    let side = state.get_side_immutable(&side_ref);
+    match move_choice {
+        MoveChoice::Move(move_index)
+        | MoveChoice::MoveTera(move_index)
+        | MoveChoice::MoveMega(move_index) => {
+            let mut choice = side.get_active_immutable().moves[move_index].choice.clone();
+            choice.move_index = *move_index;
+            Some(choice)
+        }
+        MoveChoice::Switch(switch_id) => {
+            let mut choice = Choice::default();
+            choice.switch_id = *switch_id;
+            choice.category = MoveCategory::Switch;
+            Some(choice)
+        }
+        MoveChoice::None => None,
+    }
+}
+
+pub fn calculate_both_damage_rolls_with_choices(
+    state: &State,
+    side_one_move: &MoveChoice,
+    side_two_move: &MoveChoice,
+    side_one_moves_first: bool,
+) -> (Option<Vec<i16>>, Option<Vec<i16>>) {
+    let mut working_state = state.clone();
+
+    if matches!(side_one_move, MoveChoice::MoveTera(_)) {
+        working_state.side_one.get_active().terastallized = true;
+    }
+    if matches!(side_two_move, MoveChoice::MoveTera(_)) {
+        working_state.side_two.get_active().terastallized = true;
+    }
+    if matches!(side_one_move, MoveChoice::MoveMega(_)) {
+        let mut mega_instructions = StateInstructions::default();
+        mega_evolve(&mut working_state, SideReference::SideOne, &mut mega_instructions);
+    }
+    if matches!(side_two_move, MoveChoice::MoveMega(_)) {
+        let mut mega_instructions = StateInstructions::default();
+        mega_evolve(&mut working_state, SideReference::SideTwo, &mut mega_instructions);
+    }
+
+    let mut s1_choice = match choice_from_move_choice(&working_state, SideReference::SideOne, side_one_move) {
+        Some(choice) => choice,
+        None => return (None, None),
+    };
+    let mut s2_choice = match choice_from_move_choice(&working_state, SideReference::SideTwo, side_two_move) {
+        Some(choice) => choice,
+        None => return (None, None),
+    };
+
+    if side_one_moves_first {
+        s1_choice.first_move = true;
+        s2_choice.first_move = false;
+    } else {
+        s1_choice.first_move = false;
+        s2_choice.first_move = true;
+    }
+
+    let damages_dealt_s1 = if s1_choice.category == MoveCategory::Switch {
+        None
+    } else {
+        calculate_damage_rolls(
+            working_state.clone(),
+            &SideReference::SideOne,
+            s1_choice.clone(),
+            &s2_choice,
+        )
+    };
+    let damages_dealt_s2 = if s2_choice.category == MoveCategory::Switch {
+        None
+    } else {
+        calculate_damage_rolls(
+            working_state,
+            &SideReference::SideTwo,
+            s2_choice,
+            &s1_choice,
+        )
+    };
+
+    (damages_dealt_s1, damages_dealt_s2)
+}
+
+fn calculate_damage_roll_ranges_with_choice(
+    state: State,
+    attacking_side_ref: &SideReference,
+    mut choice: Choice,
+    mut defending_choice: Choice,
+) -> (Option<Vec<i16>>, Option<Vec<i16>>) {
+    if choice.move_id == Choices::FUTURESIGHT {
+        return (Some(vec![0, 0]), Some(vec![0, 0]));
+    }
+
+    let mut incoming_instructions = StateInstructions::default();
+
+    match choice.move_id {
+        Choices::FINALGAMBIT => {
+            let attacker_active = state.get_side_immutable(attacking_side_ref).get_active_immutable();
+            let defender_active = state
+                .get_side_immutable(&attacking_side_ref.get_other_side())
+                .get_active_immutable();
+            if type_effectiveness_modifier(&PokemonType::NORMAL, defender_active) == 0.0 {
+                return (None, None);
+            }
+            let dmg = cmp::min(attacker_active.hp, defender_active.hp);
+            return (Some(vec![dmg, dmg]), Some(vec![dmg, dmg]));
+        }
+        Choices::ENDEAVOR => {
+            let attacker_active = state.get_side_immutable(attacking_side_ref).get_active_immutable();
+            let defender_active = state
+                .get_side_immutable(&attacking_side_ref.get_other_side())
+                .get_active_immutable();
+            if type_effectiveness_modifier(&PokemonType::NORMAL, defender_active) == 0.0
+                || attacker_active.hp >= defender_active.hp
+            {
+                return (None, None);
+            }
+            let dmg = defender_active.hp - attacker_active.hp;
+            return (Some(vec![dmg, dmg]), Some(vec![dmg, dmg]));
+        }
+        Choices::PAINSPLIT => {
+            let attacker_active = state.get_side_immutable(attacking_side_ref).get_active_immutable();
+            let defender_active = state
+                .get_side_immutable(&attacking_side_ref.get_other_side())
+                .get_active_immutable();
+            let dmg = defender_active.hp - (attacker_active.hp + defender_active.hp) / 2;
+            return (Some(vec![dmg, dmg]), Some(vec![dmg, dmg]));
+        }
+        Choices::SUPERFANG
+            if type_effectiveness_modifier(
+                &PokemonType::NORMAL,
+                state
+                    .get_side_immutable(&attacking_side_ref.get_other_side())
+                    .get_active_immutable(),
+            ) == 0.0 =>
+        {
+            return (None, None);
+        }
+        Choices::SUPERFANG | Choices::NATURESMADNESS | Choices::RUINATION => {
+            let defender_active = state
+                .get_side_immutable(&attacking_side_ref.get_other_side())
+                .get_active_immutable();
+            let dmg = defender_active.hp / 2;
+            return (Some(vec![dmg, dmg]), Some(vec![dmg, dmg]));
+        }
+        Choices::SUCKERPUNCH | Choices::THUNDERCLAP => {
+            defending_choice = MOVES.get(&Choices::TACKLE).unwrap().clone();
+        }
+        _ => {}
+    }
+
+    before_move(
+        &mut state.clone(),
+        &mut choice,
+        &defending_choice,
+        attacking_side_ref,
+        &mut incoming_instructions,
+    );
+
+    if choice.move_id == Choices::FUTURESIGHT {
+        choice = MOVES.get(&Choices::FUTURESIGHT).unwrap().clone();
+    }
+
+    let min_damage = calculate_damage(&state, attacking_side_ref, &choice, DamageRolls::Min)
+        .map(|(damage, crit_damage)| vec![damage, crit_damage]);
+    let max_damage = calculate_damage(&state, attacking_side_ref, &choice, DamageRolls::Max)
+        .map(|(damage, crit_damage)| vec![damage, crit_damage]);
+
+    (min_damage, max_damage)
+}
+
+pub fn calculate_both_damage_roll_ranges_with_choices(
+    state: &State,
+    side_one_move: &MoveChoice,
+    side_two_move: &MoveChoice,
+    side_one_moves_first: bool,
+) -> ((Option<Vec<i16>>, Option<Vec<i16>>), (Option<Vec<i16>>, Option<Vec<i16>>)) {
+    let mut working_state = state.clone();
+
+    if matches!(side_one_move, MoveChoice::MoveTera(_)) {
+        working_state.side_one.get_active().terastallized = true;
+    }
+    if matches!(side_two_move, MoveChoice::MoveTera(_)) {
+        working_state.side_two.get_active().terastallized = true;
+    }
+    if matches!(side_one_move, MoveChoice::MoveMega(_)) {
+        let mut mega_instructions = StateInstructions::default();
+        mega_evolve(&mut working_state, SideReference::SideOne, &mut mega_instructions);
+    }
+    if matches!(side_two_move, MoveChoice::MoveMega(_)) {
+        let mut mega_instructions = StateInstructions::default();
+        mega_evolve(&mut working_state, SideReference::SideTwo, &mut mega_instructions);
+    }
+
+    let mut s1_choice = match choice_from_move_choice(&working_state, SideReference::SideOne, side_one_move) {
+        Some(choice) => choice,
+        None => return ((None, None), (None, None)),
+    };
+    let mut s2_choice = match choice_from_move_choice(&working_state, SideReference::SideTwo, side_two_move) {
+        Some(choice) => choice,
+        None => return ((None, None), (None, None)),
+    };
+
+    if side_one_moves_first {
+        s1_choice.first_move = true;
+        s2_choice.first_move = false;
+    } else {
+        s1_choice.first_move = false;
+        s2_choice.first_move = true;
+    }
+
+    let s1_ranges = if s1_choice.category == MoveCategory::Switch {
+        (None, None)
+    } else {
+        calculate_damage_roll_ranges_with_choice(
+            working_state.clone(),
+            &SideReference::SideOne,
+            s1_choice.clone(),
+            s2_choice.clone(),
+        )
+    };
+    let s2_ranges = if s2_choice.category == MoveCategory::Switch {
+        (None, None)
+    } else {
+        calculate_damage_roll_ranges_with_choice(
+            working_state,
+            &SideReference::SideTwo,
+            s2_choice,
+            s1_choice,
+        )
+    };
+
+    (s1_ranges, s2_ranges)
+}
+
+pub fn calculate_both_damage_roll_ranges(
+    state: &State,
+    mut s1_choice: Choice,
+    mut s2_choice: Choice,
+    side_one_moves_first: bool,
+) -> ((Option<Vec<i16>>, Option<Vec<i16>>), (Option<Vec<i16>>, Option<Vec<i16>>)) {
+    if side_one_moves_first {
+        s1_choice.first_move = true;
+        s2_choice.first_move = false;
+    } else {
+        s1_choice.first_move = false;
+        s2_choice.first_move = true;
+    }
+
+    let s1_min = calculate_damage_rolls_with_mode(
+        state.clone(),
+        &SideReference::SideOne,
+        s1_choice.clone(),
+        &s2_choice,
+        DamageRolls::Min,
+    );
+    let s1_max = calculate_damage_rolls_with_mode(
+        state.clone(),
+        &SideReference::SideOne,
+        s1_choice.clone(),
+        &s2_choice,
+        DamageRolls::Max,
+    );
+    let s2_min = calculate_damage_rolls_with_mode(
+        state.clone(),
+        &SideReference::SideTwo,
+        s2_choice.clone(),
+        &s1_choice,
+        DamageRolls::Min,
+    );
+    let s2_max = calculate_damage_rolls_with_mode(
+        state.clone(),
+        &SideReference::SideTwo,
+        s2_choice,
+        &s1_choice,
+        DamageRolls::Max,
+    );
+
+    ((s1_min, s1_max), (s2_min, s2_max))
 }
 
 #[cfg(test)]

@@ -459,7 +459,7 @@ def calculate_damage(
     side_one_move: str,
     side_two_move: str,
     side_one_moves_first: bool,
-) -> List[int]:
+) -> Tuple[List[int], List[int]]:
     """
     Calculate damage rolls for a move.
 
@@ -468,5 +468,23 @@ def calculate_damage(
     :param side_two_move: The move used for side_two
     :param side_one_moves_first: if side_one moves first
     :return: List of damage values
+    """
+    ...
+
+def calculate_damage_range(
+    py_state: State,
+    side_one_move: str,
+    side_two_move: str,
+    side_one_moves_first: bool,
+) -> Tuple[Tuple[int, int, int, int], Tuple[int, int, int, int]]:
+    """
+    Calculate min/max normal and crit damage for both sides.
+
+    :param py_state: The current game state
+    :param side_one_move: The move used for side_one
+    :param side_two_move: The move used for side_two
+    :param side_one_moves_first: if side_one moves first
+    :return: ((side_one_min_normal, side_one_max_normal, side_one_min_crit, side_one_max_crit),
+              (side_two_min_normal, side_two_max_normal, side_two_min_crit, side_two_max_crit))
     """
     ...

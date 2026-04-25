@@ -73,6 +73,7 @@ pub enum Instruction {
     DecrementRestTurns(DecrementRestTurnsInstruction),
     SetRestTurns(SetSleepTurnsInstruction),
     SetSleepTurns(SetSleepTurnsInstruction),
+    SetFreezeTurns(SetSleepTurnsInstruction),
     ChangeSubstituteHealth(ChangeSubsituteHealthInstruction),
     FormeChange(FormeChangeInstruction),
     SetSideOneMoveSecondSwitchOutMove(SetSecondMoveSwitchOutMoveInstruction),
@@ -246,6 +247,13 @@ impl fmt::Debug for Instruction {
                 write!(
                     f,
                     "SetSleepTurns {:?}-{:?}: {:?} -> {:?}",
+                    s.side_ref, s.pokemon_index, s.previous_turns, s.new_turns
+                )
+            }
+            Instruction::SetFreezeTurns(s) => {
+                write!(
+                    f,
+                    "SetFreezeTurns {:?}-{:?}: {:?} -> {:?}",
                     s.side_ref, s.pokemon_index, s.previous_turns, s.new_turns
                 )
             }

@@ -806,6 +806,7 @@ pub struct Pokemon {
     pub status: PokemonStatus,
     pub rest_turns: i8,
     pub sleep_turns: i8,
+    pub freeze_turns: i8,
     pub weight_kg: f32,
     pub terastallized: bool,
     pub tera_type: PokemonType,
@@ -834,6 +835,7 @@ impl Default for Pokemon {
             status: PokemonStatus::NONE,
             rest_turns: 0,
             sleep_turns: 0,
+            freeze_turns: 0,
             weight_kg: 1.0,
             terastallized: false,
             tera_type: PokemonType::NORMAL,
@@ -899,7 +901,7 @@ impl Pokemon {
             self.evs.0, self.evs.1, self.evs.2, self.evs.3, self.evs.4, self.evs.5
         );
         format!(
-            "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+            "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
             self.id,
             self.level,
             self.types.0.to_string(),
@@ -928,6 +930,7 @@ impl Pokemon {
             self.moves.m3.serialize(),
             self.terastallized,
             self.tera_type.to_string(),
+            self.freeze_turns,
         )
     }
 
@@ -981,6 +984,10 @@ impl Pokemon {
             },
             terastallized: split[26].parse::<bool>().unwrap(),
             tera_type: PokemonType::from_str(split[27]).unwrap(),
+            freeze_turns: split
+                .get(28)
+                .and_then(|value| value.parse::<i8>().ok())
+                .unwrap_or(0),
         }
     }
 }
@@ -1678,6 +1685,15 @@ impl State {
         self.get_side(side_reference).pokemon[pokemon_index].sleep_turns = amount;
     }
 
+    fn set_freeze_turn(
+        &mut self,
+        side_reference: &SideReference,
+        pokemon_index: PokemonIndex,
+        amount: i8,
+    ) {
+        self.get_side(side_reference).pokemon[pokemon_index].freeze_turns = amount;
+    }
+
     fn toggle_trickroom(&mut self, new_turns_remaining: i8) {
         self.trick_room.active = !self.trick_room.active;
         self.trick_room.turns_remaining = new_turns_remaining;
@@ -1835,6 +1851,13 @@ impl State {
             }
             Instruction::SetSleepTurns(instruction) => {
                 self.set_sleep_turn(
+                    &instruction.side_ref,
+                    instruction.pokemon_index,
+                    instruction.new_turns,
+                );
+            }
+            Instruction::SetFreezeTurns(instruction) => {
+                self.set_freeze_turn(
                     &instruction.side_ref,
                     instruction.pokemon_index,
                     instruction.new_turns,
@@ -2022,6 +2045,13 @@ impl State {
             }
             Instruction::SetSleepTurns(instruction) => {
                 self.set_sleep_turn(
+                    &instruction.side_ref,
+                    instruction.pokemon_index,
+                    instruction.previous_turns,
+                );
+            }
+            Instruction::SetFreezeTurns(instruction) => {
+                self.set_freeze_turn(
                     &instruction.side_ref,
                     instruction.pokemon_index,
                     instruction.previous_turns,

@@ -189,6 +189,8 @@ class Pokemon:
     :type rest_turns: int
     :param sleep_turns: Turns spent asleep. Increments from 0.
     :type sleep_turns: int
+    :param freeze_turns: Turns spent frozen. Increments from 0.
+    :type freeze_turns: int
     :param weight_kg: Weight in kilograms
     :type weight_kg: float
     :param terastallized: if the Pokemon is terastallized
@@ -222,6 +224,7 @@ class Pokemon:
     status: str
     rest_turns: int
     sleep_turns: int
+    freeze_turns: int
     weight_kg: float
     terastallized: bool
     tera_type: str
@@ -250,6 +253,7 @@ class Pokemon:
         status: str = "none",
         rest_turns: int = 0,
         sleep_turns: int = 0,
+        freeze_turns: int = 0,
         weight_kg: float = 0.0,
         moves: Optional[List[Move]] = None,
         terastallized: bool = False,

@@ -20510,6 +20510,8 @@ pub struct Choice {
     pub volatile_status: Option<VolatileStatus>,
     pub side_condition: Option<SideCondition>,
     pub secondaries: Option<Vec<Secondary>>,
+    pub bypasses_protect: bool,
+    pub protected_damage_multiplier: f32,
 
     pub target: MoveTarget,
 
@@ -20641,6 +20643,8 @@ impl Default for Choice {
             volatile_status: None,
             side_condition: None,
             secondaries: None,
+            bypasses_protect: false,
+            protected_damage_multiplier: 1.0,
             target: MoveTarget::Opponent,
             first_move: true,
             sleep_talk_move: false,

@@ -543,6 +543,7 @@ fn common_pkmn_damage_calc(
     damage_modifier *= burn_modifier(&choice.category, &attacker.status);
     damage_modifier *= volatile_status_modifier(&choice, attacking_side, defending_side);
     damage_modifier *= terrain_modifier(terrain, attacker, defender, &choice);
+    damage_modifier *= choice.protected_damage_multiplier;
 
     damage * damage_modifier
 }

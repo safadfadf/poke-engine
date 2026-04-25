@@ -2144,7 +2144,7 @@ pub fn ability_modify_attack_being_used(
         }
         Abilities::UNSEENFIST => {
             if attacker_choice.flags.contact {
-                attacker_choice.flags.protect = false
+                attacker_choice.bypasses_protect = true;
             }
         }
         Abilities::HUSTLE => {

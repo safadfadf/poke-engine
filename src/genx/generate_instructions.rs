@@ -702,6 +702,19 @@ pub fn add_remove_status_instructions(
                 pkmn.sleep_turns = 0;
             }
         }
+        PokemonStatus::FREEZE => {
+            if pkmn.freeze_turns != 0 {
+                incoming_instructions
+                    .instruction_list
+                    .push(Instruction::SetFreezeTurns(SetSleepTurnsInstruction {
+                        side_ref: side_reference,
+                        pokemon_index,
+                        new_turns: 0,
+                        previous_turns: pkmn.freeze_turns,
+                    }));
+                pkmn.freeze_turns = 0;
+            }
+        }
         PokemonStatus::TOXIC => {
             if side.side_conditions.toxic_count != 0 {
                 incoming_instructions
@@ -841,6 +854,17 @@ fn get_instructions_from_status_effects(
         })
     } else {
         let old_status = target_pkmn.status;
+        if status.status == PokemonStatus::FREEZE && target_pkmn.freeze_turns != 0 {
+            incoming_instructions
+                .instruction_list
+                .push(Instruction::SetFreezeTurns(SetSleepTurnsInstruction {
+                    side_ref: target_side_ref,
+                    pokemon_index: target_side_active,
+                    new_turns: 0,
+                    previous_turns: target_pkmn.freeze_turns,
+                }));
+            target_pkmn.freeze_turns = 0;
+        }
         target_pkmn.status = status.status;
         Instruction::ChangeStatus(ChangeStatusInstruction {
             side_ref: target_side_ref,

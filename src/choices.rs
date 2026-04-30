@@ -18123,7 +18123,7 @@ pub static MOVES: LazyLock<HashMap<Choices, Choice>> = LazyLock::new(|| {
         Choice {
             move_id: Choices::TRIPLEAXEL,
             accuracy: 90.0,
-            base_power: 40.0,
+            base_power: 20.0,
             category: MoveCategory::Physical,
             move_type: PokemonType::ICE,
             flags: Flags {

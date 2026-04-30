@@ -1078,8 +1078,7 @@ fn multi_hit_count_branches(
             }
             // Triple Axel checks accuracy for each hit.  The move-hit check above
             // already accounts for the first hit, so these probabilities are
-            // conditional on the first hit connecting.  Damage per hit is still
-            // approximated elsewhere in the engine.
+            // conditional on the first hit connecting.
             let p = multi_accuracy_continue_probability(state, attacking_side, choice);
             multi_accuracy_hit_count_branches(3, p)
         }
@@ -1118,6 +1117,55 @@ fn multi_accuracy_continue_probability(
 ) -> f32 {
     let attacking_side_state = state.get_side_immutable(attacking_side);
     ((choice.accuracy / 100.0) * boosted_accuracy(attacking_side_state.accuracy_boost)).min(1.0)
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum HitDamageMode {
+    Fixed,
+    Average,
+    CritAverage,
+}
+
+fn variable_power_multihit_multiplier(choice: &Choice, hit_number: i8) -> Option<f32> {
+    match choice.move_id {
+        Choices::TRIPLEAXEL => match hit_number {
+            1..=3 => Some(hit_number as f32),
+            _ => None,
+        },
+        Choices::TRIPLEKICK => match hit_number {
+            1..=3 => Some(hit_number as f32),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+fn damage_amount_for_hit(
+    state: &State,
+    attacking_side: &SideReference,
+    choice: &Choice,
+    hit_number: i8,
+    fallback_damage_amount: i16,
+    damage_mode: HitDamageMode,
+) -> i16 {
+    if damage_mode == HitDamageMode::Fixed {
+        return fallback_damage_amount;
+    }
+
+    let Some(multiplier) = variable_power_multihit_multiplier(choice, hit_number) else {
+        return fallback_damage_amount;
+    };
+
+    let mut hit_choice = choice.clone();
+    hit_choice.base_power *= multiplier;
+    match calculate_damage(state, attacking_side, &hit_choice, DamageRolls::Average) {
+        Some((damage, crit_damage)) => match damage_mode {
+            HitDamageMode::Average => damage,
+            HitDamageMode::CritAverage => crit_damage,
+            HitDamageMode::Fixed => fallback_damage_amount,
+        },
+        None => fallback_damage_amount,
+    }
 }
 
 fn get_instructions_from_secondaries(
@@ -2474,6 +2522,13 @@ pub fn generate_instructions_from_move(
     let mut does_damage = false;
     let (mut branch_damage, mut regular_damage) = (0, 0);
     let mut branch_instructions: Option<StateInstructions> = None;
+    let variable_power_damage = variable_power_multihit_multiplier(choice, 1).is_some();
+    let mut regular_damage_mode = if variable_power_damage {
+        HitDamageMode::Average
+    } else {
+        HitDamageMode::Fixed
+    };
+    let mut branch_damage_mode = HitDamageMode::Fixed;
     if let Some((max_damage_dealt, max_crit_damage)) = damage {
         does_damage = true;
         let avg_damage_dealt = (max_damage_dealt as f32 * 0.925) as i16;
@@ -2507,6 +2562,7 @@ pub fn generate_instructions_from_move(
 
             incoming_instructions.update_percentage(1.0 - branch_chance);
             regular_damage = average_non_kill_damage;
+            regular_damage_mode = HitDamageMode::Fixed;
         } else if branch_on_damage && max_damage_dealt < defender_active.hp {
             let crit_rate = if defender_active.ability == Abilities::BATTLEARMOR
                 || defender_active.ability == Abilities::SHELLARMOR
@@ -2525,6 +2581,9 @@ pub fn generate_instructions_from_move(
             branch_damage = (max_crit_damage as f32 * 0.925) as i16;
             incoming_instructions.update_percentage(1.0 - crit_rate);
             regular_damage = (max_damage_dealt as f32 * 0.925) as i16;
+            if variable_power_damage {
+                branch_damage_mode = HitDamageMode::CritAverage;
+            }
         } else {
             regular_damage = avg_damage_dealt;
         }
@@ -2538,6 +2597,7 @@ pub fn generate_instructions_from_move(
             &hit_count_branches,
             does_damage,
             regular_damage,
+            regular_damage_mode,
             choice,
             defender_choice,
             &mut final_instructions,
@@ -2557,6 +2617,7 @@ pub fn generate_instructions_from_move(
                 &hit_count_branches,
                 does_damage,
                 branch_damage,
+                branch_damage_mode,
                 choice,
                 defender_choice,
                 &mut final_instructions,
@@ -3673,17 +3734,26 @@ fn run_move(
     hit_count: i8,
     does_damage: bool,
     damage_amount: i16,
+    damage_mode: HitDamageMode,
     choice: &mut Choice,
     defender_choice: &Choice,
     final_instructions: &mut Vec<StateInstructions>,
 ) {
     let mut hit_sub = false;
-    for _ in 0..hit_count {
+    for hit_number in 1..=hit_count {
         if does_damage {
+            let hit_damage_amount = damage_amount_for_hit(
+                state,
+                &attacking_side,
+                choice,
+                hit_number,
+                damage_amount,
+                damage_mode,
+            );
             hit_sub = generate_instructions_from_damage(
                 state,
                 choice,
-                damage_amount,
+                hit_damage_amount,
                 &attacking_side,
                 &mut instructions,
             );
@@ -3885,6 +3955,7 @@ fn run_move_hit_count_branches(
     hit_count_branches: &[(i8, f32)],
     does_damage: bool,
     damage_amount: i16,
+    damage_mode: HitDamageMode,
     choice: &Choice,
     defender_choice: &Choice,
     final_instructions: &mut Vec<StateInstructions>,
@@ -3912,6 +3983,7 @@ fn run_move_hit_count_branches(
             *hit_count,
             does_damage,
             damage_amount,
+            damage_mode,
             &mut branch_choice,
             defender_choice,
             final_instructions,
@@ -4267,6 +4339,7 @@ fn calculate_damage_rolls_with_mode(
     mut choice: Choice,
     mut defending_choice: &Choice,
     damage_rolls: DamageRolls,
+    hit_number: i8,
 ) -> Option<Vec<i16>> {
     let mut incoming_instructions = StateInstructions::default();
 
@@ -4347,6 +4420,10 @@ fn calculate_damage_rolls_with_mode(
         choice = MOVES.get(&Choices::FUTURESIGHT)?.clone();
     }
 
+    if let Some(multiplier) = variable_power_multihit_multiplier(&choice, hit_number) {
+        choice.base_power *= multiplier;
+    }
+
     let mut return_vec = Vec::with_capacity(4);
     if let Some((damage, crit_damage)) =
         calculate_damage(&state, attacking_side_ref, &choice, damage_rolls)
@@ -4371,6 +4448,7 @@ pub fn calculate_damage_rolls(
         choice,
         defending_choice,
         DamageRolls::Max,
+        1,
     )
 }
 
@@ -4380,7 +4458,30 @@ pub fn calculate_single_hit_damage_rolls(
     choice: Choice,
     defending_choice: &Choice,
 ) -> Option<Vec<i16>> {
-    calculate_damage_rolls(state, attacking_side_ref, choice, defending_choice)
+    calculate_single_hit_damage_rolls_for_hit(
+        state,
+        attacking_side_ref,
+        choice,
+        defending_choice,
+        1,
+    )
+}
+
+pub fn calculate_single_hit_damage_rolls_for_hit(
+    state: State,
+    attacking_side_ref: &SideReference,
+    choice: Choice,
+    defending_choice: &Choice,
+    hit_number: i8,
+) -> Option<Vec<i16>> {
+    calculate_damage_rolls_with_mode(
+        state,
+        attacking_side_ref,
+        choice,
+        defending_choice,
+        DamageRolls::Max,
+        hit_number,
+    )
 }
 
 pub fn calculate_both_damage_rolls(
@@ -4419,7 +4520,48 @@ pub fn calculate_both_single_hit_damage_rolls(
     s2_choice: Choice,
     side_one_moves_first: bool,
 ) -> (Option<Vec<i16>>, Option<Vec<i16>>) {
-    calculate_both_damage_rolls(state, s1_choice, s2_choice, side_one_moves_first)
+    calculate_both_single_hit_damage_rolls_for_hits(
+        state,
+        s1_choice,
+        s2_choice,
+        side_one_moves_first,
+        1,
+        1,
+    )
+}
+
+pub fn calculate_both_single_hit_damage_rolls_for_hits(
+    state: &State,
+    mut s1_choice: Choice,
+    mut s2_choice: Choice,
+    side_one_moves_first: bool,
+    side_one_hit_number: i8,
+    side_two_hit_number: i8,
+) -> (Option<Vec<i16>>, Option<Vec<i16>>) {
+    if side_one_moves_first {
+        s1_choice.first_move = true;
+        s2_choice.first_move = false;
+    } else {
+        s1_choice.first_move = false;
+        s2_choice.first_move = true;
+    }
+
+    let damages_dealt_s1 = calculate_single_hit_damage_rolls_for_hit(
+        state.clone(),
+        &SideReference::SideOne,
+        s1_choice.clone(),
+        &s2_choice,
+        side_one_hit_number,
+    );
+    let damages_dealt_s2 = calculate_single_hit_damage_rolls_for_hit(
+        state.clone(),
+        &SideReference::SideTwo,
+        s2_choice,
+        &s1_choice,
+        side_two_hit_number,
+    );
+
+    (damages_dealt_s1, damages_dealt_s2)
 }
 
 fn choice_from_move_choice(
@@ -4714,6 +4856,7 @@ pub fn calculate_both_damage_roll_ranges(
         s1_choice.clone(),
         &s2_choice,
         DamageRolls::Min,
+        1,
     );
     let s1_max = calculate_damage_rolls_with_mode(
         state.clone(),
@@ -4721,6 +4864,7 @@ pub fn calculate_both_damage_roll_ranges(
         s1_choice.clone(),
         &s2_choice,
         DamageRolls::Max,
+        1,
     );
     let s2_min = calculate_damage_rolls_with_mode(
         state.clone(),
@@ -4728,6 +4872,7 @@ pub fn calculate_both_damage_roll_ranges(
         s2_choice.clone(),
         &s1_choice,
         DamageRolls::Min,
+        1,
     );
     let s2_max = calculate_damage_rolls_with_mode(
         state.clone(),
@@ -4735,6 +4880,7 @@ pub fn calculate_both_damage_roll_ranges(
         s2_choice,
         &s1_choice,
         DamageRolls::Max,
+        1,
     );
 
     ((s1_min, s1_max), (s2_min, s2_max))
@@ -5955,9 +6101,9 @@ mod tests {
 
     #[test]
     #[cfg(feature = "gen9")]
-    fn test_unseen_fist_only_reduces_damage_through_protect() {
+    fn test_piercing_drill_only_reduces_damage_through_protect() {
         let mut state = State::default();
-        state.side_one.get_active().ability = Abilities::UNSEENFIST;
+        state.side_one.get_active().ability = Abilities::PIERCINGDRILL;
         let mut choice = MOVES.get(&Choices::TACKLE).unwrap().to_owned();
         let defender_choice = Choice::default();
         let mut incoming_instructions = StateInstructions::default();
@@ -5973,12 +6119,12 @@ mod tests {
             &SideReference::SideOne,
             &mut incoming_instructions,
         );
-        let unseen_fist_damage =
+        let piercing_drill_damage =
             calculate_damage(&state, &SideReference::SideOne, &choice, DamageRolls::Max)
                 .unwrap()
                 .0;
 
-        assert_eq!(base_damage, unseen_fist_damage);
+        assert_eq!(base_damage, piercing_drill_damage);
 
         state
             .side_two

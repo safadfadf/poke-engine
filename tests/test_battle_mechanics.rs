@@ -15943,6 +15943,33 @@ fn damage_hit_branch_percentages(instructions: &[StateInstructions]) -> Vec<(usi
         .collect()
 }
 
+fn damage_amounts_for_branch_with_hits(
+    instructions: &[StateInstructions],
+    hit_count: usize,
+) -> Vec<i16> {
+    instructions
+        .iter()
+        .find_map(|branch| {
+            let damage_amounts = branch
+                .instruction_list
+                .iter()
+                .filter_map(|instruction| match instruction {
+                    Instruction::Damage(DamageInstruction {
+                        side_ref: SideReference::SideTwo,
+                        damage_amount,
+                    }) => Some(*damage_amount),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            if damage_amounts.len() == hit_count {
+                Some(damage_amounts)
+            } else {
+                None
+            }
+        })
+        .unwrap()
+}
+
 fn assert_branch_percentages_close(actual: &[(usize, f32)], expected: &[(usize, f32)]) {
     assert_eq!(actual.len(), expected.len());
     for ((actual_hits, actual_percentage), (expected_hits, expected_percentage)) in
@@ -15957,6 +15984,48 @@ fn assert_branch_percentages_close(actual: &[(usize, f32)], expected: &[(usize, 
             actual_percentage
         );
     }
+}
+
+#[test]
+#[cfg(feature = "gen9")]
+fn test_triple_axel_uses_increasing_damage_per_hit() {
+    let mut state = State::default();
+    state.side_two.get_active().hp = 500;
+    state.side_two.get_active().maxhp = 500;
+
+    let vec_of_instructions = set_moves_on_pkmn_and_call_generate_instructions(
+        &mut state,
+        Choices::TRIPLEAXEL,
+        Choices::SPLASH,
+    );
+
+    let damage_amounts = damage_amounts_for_branch_with_hits(&vec_of_instructions, 3);
+    assert!(
+        damage_amounts[0] < damage_amounts[1] && damage_amounts[1] < damage_amounts[2],
+        "expected Triple Axel damage to increase per hit, got {:?}",
+        damage_amounts
+    );
+}
+
+#[test]
+#[cfg(feature = "gen9")]
+fn test_triple_kick_uses_increasing_damage_per_hit() {
+    let mut state = State::default();
+    state.side_two.get_active().hp = 500;
+    state.side_two.get_active().maxhp = 500;
+
+    let vec_of_instructions = set_moves_on_pkmn_and_call_generate_instructions(
+        &mut state,
+        Choices::TRIPLEKICK,
+        Choices::SPLASH,
+    );
+
+    let damage_amounts = damage_amounts_for_branch_with_hits(&vec_of_instructions, 3);
+    assert!(
+        damage_amounts[0] < damage_amounts[1] && damage_amounts[1] < damage_amounts[2],
+        "expected Triple Kick damage to increase per hit, got {:?}",
+        damage_amounts
+    );
 }
 
 #[test]

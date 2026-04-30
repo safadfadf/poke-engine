@@ -8,7 +8,7 @@ use poke_engine::engine::abilities::Abilities;
 use poke_engine::engine::generate_instructions::{
     calculate_both_damage_roll_ranges, calculate_both_damage_roll_ranges_with_choices,
     calculate_both_damage_rolls, calculate_both_damage_rolls_with_choices,
-    calculate_both_single_hit_damage_rolls, generate_instructions_from_move_pair,
+    calculate_both_single_hit_damage_rolls_for_hits, generate_instructions_from_move_pair,
 };
 use poke_engine::engine::items::Items;
 use poke_engine::engine::state::{MoveChoice, PokemonVolatileStatus, Terrain, Weather};
@@ -1090,12 +1090,21 @@ fn calculate_damage(
     Ok((s1_py_rolls, s2_py_rolls))
 }
 
-#[pyfunction]
+#[pyfunction(signature = (
+    py_state,
+    side_one_move,
+    side_two_move,
+    side_one_moves_first,
+    side_one_hit_number=None,
+    side_two_hit_number=None
+))]
 fn calculate_single_hit_damage(
     py_state: PyState,
     side_one_move: String,
     side_two_move: String,
     side_one_moves_first: bool,
+    side_one_hit_number: Option<i8>,
+    side_two_hit_number: Option<i8>,
 ) -> PyResult<(Vec<i16>, Vec<i16>)> {
     let state: State = py_state.into();
     let (mut s1_choice, mut s2_choice);
@@ -1113,7 +1122,7 @@ fn calculate_single_hit_damage(
         None => {
             return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
                 "Invalid move for s2: {}",
-                side_one_move
+                side_two_move
             )))
         }
     }
@@ -1124,8 +1133,14 @@ fn calculate_single_hit_damage(
         s2_choice.category = MoveCategory::Switch
     }
 
-    let (s1_damage_rolls, s2_damage_rolls) =
-        calculate_both_single_hit_damage_rolls(&state, s1_choice, s2_choice, side_one_moves_first);
+    let (s1_damage_rolls, s2_damage_rolls) = calculate_both_single_hit_damage_rolls_for_hits(
+        &state,
+        s1_choice,
+        s2_choice,
+        side_one_moves_first,
+        side_one_hit_number.unwrap_or(1).max(1),
+        side_two_hit_number.unwrap_or(1).max(1),
+    );
 
     Ok((
         s1_damage_rolls.unwrap_or_else(|| vec![0, 0]),

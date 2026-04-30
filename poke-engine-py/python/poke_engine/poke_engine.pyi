@@ -475,6 +475,19 @@ def calculate_damage(
     """
     ...
 
+def calculate_single_hit_damage(
+    py_state: State,
+    side_one_move: str,
+    side_two_move: str,
+    side_one_moves_first: bool,
+) -> Tuple[List[int], List[int]]:
+    """
+    Calculate single-hit damage rolls for a move.
+
+    Multi-hit moves return the per-hit damage roll, not total damage across all hits.
+    """
+    ...
+
 def calculate_damage_range(
     py_state: State,
     side_one_move: str,

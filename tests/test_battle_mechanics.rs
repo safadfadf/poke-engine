@@ -15752,11 +15752,69 @@ fn test_population_bomb_with_widelens() {
 
     let expected_instructions = vec![
         StateInstructions {
-            percentage: 10.000002,
+            percentage: 0.99999905,
             instruction_list: vec![],
         },
         StateInstructions {
-            percentage: 90.0,
+            percentage: 0.98999906,
+            instruction_list: vec![Instruction::Damage(DamageInstruction {
+                side_ref: SideReference::SideTwo,
+                damage_amount: 24,
+            })],
+        },
+        StateInstructions {
+            percentage: 0.9800991,
+            instruction_list: vec![
+                Instruction::Damage(DamageInstruction {
+                    side_ref: SideReference::SideTwo,
+                    damage_amount: 24,
+                }),
+                Instruction::Damage(DamageInstruction {
+                    side_ref: SideReference::SideTwo,
+                    damage_amount: 24,
+                }),
+            ],
+        },
+        StateInstructions {
+            percentage: 0.9702981,
+            instruction_list: vec![
+                Instruction::Damage(DamageInstruction {
+                    side_ref: SideReference::SideTwo,
+                    damage_amount: 24,
+                }),
+                Instruction::Damage(DamageInstruction {
+                    side_ref: SideReference::SideTwo,
+                    damage_amount: 24,
+                }),
+                Instruction::Damage(DamageInstruction {
+                    side_ref: SideReference::SideTwo,
+                    damage_amount: 24,
+                }),
+            ],
+        },
+        StateInstructions {
+            percentage: 0.9605952,
+            instruction_list: vec![
+                Instruction::Damage(DamageInstruction {
+                    side_ref: SideReference::SideTwo,
+                    damage_amount: 24,
+                }),
+                Instruction::Damage(DamageInstruction {
+                    side_ref: SideReference::SideTwo,
+                    damage_amount: 24,
+                }),
+                Instruction::Damage(DamageInstruction {
+                    side_ref: SideReference::SideTwo,
+                    damage_amount: 24,
+                }),
+                Instruction::Damage(DamageInstruction {
+                    side_ref: SideReference::SideTwo,
+                    damage_amount: 24,
+                }),
+            ],
+        },
+        StateInstructions {
+            percentage: 95.099014,
             instruction_list: vec![
                 Instruction::Damage(DamageInstruction {
                     side_ref: SideReference::SideTwo,
@@ -15782,6 +15840,175 @@ fn test_population_bomb_with_widelens() {
         },
     ];
     assert_eq!(expected_instructions, vec_of_instructions);
+}
+
+#[test]
+#[cfg(feature = "gen9")]
+fn test_loaded_dice_branches_two_to_five_hits_as_four_or_five() {
+    let mut state = State::default();
+    state.side_one.get_active().item = Items::LOADEDDICE;
+
+    let vec_of_instructions = set_moves_on_pkmn_and_call_generate_instructions(
+        &mut state,
+        Choices::SCALESHOT,
+        Choices::SPLASH,
+    );
+
+    let expected_instructions = vec![
+        StateInstructions {
+            percentage: 10.000002,
+            instruction_list: vec![],
+        },
+        StateInstructions {
+            percentage: 45.0,
+            instruction_list: vec![
+                Instruction::Damage(DamageInstruction {
+                    side_ref: SideReference::SideTwo,
+                    damage_amount: 21,
+                }),
+                Instruction::Damage(DamageInstruction {
+                    side_ref: SideReference::SideTwo,
+                    damage_amount: 21,
+                }),
+                Instruction::Damage(DamageInstruction {
+                    side_ref: SideReference::SideTwo,
+                    damage_amount: 21,
+                }),
+                Instruction::Damage(DamageInstruction {
+                    side_ref: SideReference::SideTwo,
+                    damage_amount: 21,
+                }),
+                Instruction::Boost(BoostInstruction {
+                    side_ref: SideReference::SideOne,
+                    stat: PokemonBoostableStat::Defense,
+                    amount: -1,
+                }),
+                Instruction::Boost(BoostInstruction {
+                    side_ref: SideReference::SideOne,
+                    stat: PokemonBoostableStat::Speed,
+                    amount: 1,
+                }),
+            ],
+        },
+        StateInstructions {
+            percentage: 45.0,
+            instruction_list: vec![
+                Instruction::Damage(DamageInstruction {
+                    side_ref: SideReference::SideTwo,
+                    damage_amount: 21,
+                }),
+                Instruction::Damage(DamageInstruction {
+                    side_ref: SideReference::SideTwo,
+                    damage_amount: 21,
+                }),
+                Instruction::Damage(DamageInstruction {
+                    side_ref: SideReference::SideTwo,
+                    damage_amount: 21,
+                }),
+                Instruction::Damage(DamageInstruction {
+                    side_ref: SideReference::SideTwo,
+                    damage_amount: 21,
+                }),
+                Instruction::Damage(DamageInstruction {
+                    side_ref: SideReference::SideTwo,
+                    damage_amount: 16,
+                }),
+                Instruction::Boost(BoostInstruction {
+                    side_ref: SideReference::SideOne,
+                    stat: PokemonBoostableStat::Defense,
+                    amount: -1,
+                }),
+                Instruction::Boost(BoostInstruction {
+                    side_ref: SideReference::SideOne,
+                    stat: PokemonBoostableStat::Speed,
+                    amount: 1,
+                }),
+            ],
+        },
+    ];
+    assert_eq!(expected_instructions, vec_of_instructions);
+}
+
+fn damage_hit_branch_percentages(instructions: &[StateInstructions]) -> Vec<(usize, f32)> {
+    instructions
+        .iter()
+        .map(|branch| {
+            let damage_hits = branch
+                .instruction_list
+                .iter()
+                .filter(|instruction| matches!(instruction, Instruction::Damage(_)))
+                .count();
+            (damage_hits, branch.percentage)
+        })
+        .collect()
+}
+
+fn assert_branch_percentages_close(actual: &[(usize, f32)], expected: &[(usize, f32)]) {
+    assert_eq!(actual.len(), expected.len());
+    for ((actual_hits, actual_percentage), (expected_hits, expected_percentage)) in
+        actual.iter().zip(expected.iter())
+    {
+        assert_eq!(actual_hits, expected_hits);
+        assert!(
+            (actual_percentage - expected_percentage).abs() < 0.001,
+            "expected {} hits to have percentage {}, got {}",
+            expected_hits,
+            expected_percentage,
+            actual_percentage
+        );
+    }
+}
+
+#[test]
+#[cfg(feature = "gen9")]
+fn test_loaded_dice_population_bomb_still_checks_later_accuracy() {
+    let mut state = State::default();
+    state.side_one.get_active().item = Items::LOADEDDICE;
+    state.side_two.get_active().hp = 500;
+    state.side_two.get_active().maxhp = 500;
+
+    let vec_of_instructions = set_moves_on_pkmn_and_call_generate_instructions(
+        &mut state,
+        Choices::POPULATIONBOMB,
+        Choices::SPLASH,
+    );
+
+    assert_branch_percentages_close(
+        &damage_hit_branch_percentages(&vec_of_instructions),
+        &[
+            (0, 10.000002),
+            (1, 9.0),
+            (2, 8.099999),
+            (3, 7.289999),
+            (4, 14.996571),
+            (5, 12.653357),
+            (6, 10.62882),
+            (7, 8.882655),
+            (8, 7.379437),
+            (9, 6.088036),
+            (10, 4.981121),
+        ],
+    );
+}
+
+#[test]
+#[cfg(feature = "gen9")]
+fn test_loaded_dice_does_not_force_triple_axel_to_three_hits() {
+    let mut state = State::default();
+    state.side_one.get_active().item = Items::LOADEDDICE;
+    state.side_two.get_active().hp = 500;
+    state.side_two.get_active().maxhp = 500;
+
+    let vec_of_instructions = set_moves_on_pkmn_and_call_generate_instructions(
+        &mut state,
+        Choices::TRIPLEAXEL,
+        Choices::SPLASH,
+    );
+
+    assert_branch_percentages_close(
+        &damage_hit_branch_percentages(&vec_of_instructions),
+        &[(0, 10.000002), (1, 9.0), (2, 8.099999), (3, 72.9)],
+    );
 }
 
 #[test]
@@ -15844,7 +16071,30 @@ fn test_scaleshot_only_boosts_once() {
             instruction_list: vec![],
         },
         StateInstructions {
-            percentage: 90.0,
+            percentage: 31.5,
+            instruction_list: vec![
+                Instruction::Damage(DamageInstruction {
+                    side_ref: SideReference::SideTwo,
+                    damage_amount: 21,
+                }),
+                Instruction::Damage(DamageInstruction {
+                    side_ref: SideReference::SideTwo,
+                    damage_amount: 21,
+                }),
+                Instruction::Boost(BoostInstruction {
+                    side_ref: SideReference::SideOne,
+                    stat: PokemonBoostableStat::Defense,
+                    amount: -1,
+                }),
+                Instruction::Boost(BoostInstruction {
+                    side_ref: SideReference::SideOne,
+                    stat: PokemonBoostableStat::Speed,
+                    amount: 1,
+                }),
+            ],
+        },
+        StateInstructions {
+            percentage: 31.5,
             instruction_list: vec![
                 Instruction::Damage(DamageInstruction {
                     side_ref: SideReference::SideTwo,
@@ -15857,6 +16107,72 @@ fn test_scaleshot_only_boosts_once() {
                 Instruction::Damage(DamageInstruction {
                     side_ref: SideReference::SideTwo,
                     damage_amount: 21,
+                }),
+                Instruction::Boost(BoostInstruction {
+                    side_ref: SideReference::SideOne,
+                    stat: PokemonBoostableStat::Defense,
+                    amount: -1,
+                }),
+                Instruction::Boost(BoostInstruction {
+                    side_ref: SideReference::SideOne,
+                    stat: PokemonBoostableStat::Speed,
+                    amount: 1,
+                }),
+            ],
+        },
+        StateInstructions {
+            percentage: 13.500001,
+            instruction_list: vec![
+                Instruction::Damage(DamageInstruction {
+                    side_ref: SideReference::SideTwo,
+                    damage_amount: 21,
+                }),
+                Instruction::Damage(DamageInstruction {
+                    side_ref: SideReference::SideTwo,
+                    damage_amount: 21,
+                }),
+                Instruction::Damage(DamageInstruction {
+                    side_ref: SideReference::SideTwo,
+                    damage_amount: 21,
+                }),
+                Instruction::Damage(DamageInstruction {
+                    side_ref: SideReference::SideTwo,
+                    damage_amount: 21,
+                }),
+                Instruction::Boost(BoostInstruction {
+                    side_ref: SideReference::SideOne,
+                    stat: PokemonBoostableStat::Defense,
+                    amount: -1,
+                }),
+                Instruction::Boost(BoostInstruction {
+                    side_ref: SideReference::SideOne,
+                    stat: PokemonBoostableStat::Speed,
+                    amount: 1,
+                }),
+            ],
+        },
+        StateInstructions {
+            percentage: 13.500001,
+            instruction_list: vec![
+                Instruction::Damage(DamageInstruction {
+                    side_ref: SideReference::SideTwo,
+                    damage_amount: 21,
+                }),
+                Instruction::Damage(DamageInstruction {
+                    side_ref: SideReference::SideTwo,
+                    damage_amount: 21,
+                }),
+                Instruction::Damage(DamageInstruction {
+                    side_ref: SideReference::SideTwo,
+                    damage_amount: 21,
+                }),
+                Instruction::Damage(DamageInstruction {
+                    side_ref: SideReference::SideTwo,
+                    damage_amount: 21,
+                }),
+                Instruction::Damage(DamageInstruction {
+                    side_ref: SideReference::SideTwo,
+                    damage_amount: 16,
                 }),
                 Instruction::Boost(BoostInstruction {
                     side_ref: SideReference::SideOne,

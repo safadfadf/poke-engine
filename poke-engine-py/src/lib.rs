@@ -6,9 +6,9 @@ use std::collections::HashSet;
 use poke_engine::choices::{Choices, MoveCategory, MOVES};
 use poke_engine::engine::abilities::Abilities;
 use poke_engine::engine::generate_instructions::{
-    calculate_both_damage_roll_ranges, calculate_both_damage_rolls,
-    calculate_both_damage_roll_ranges_with_choices, calculate_both_damage_rolls_with_choices,
-    generate_instructions_from_move_pair,
+    calculate_both_damage_roll_ranges, calculate_both_damage_roll_ranges_with_choices,
+    calculate_both_damage_rolls, calculate_both_damage_rolls_with_choices,
+    calculate_both_single_hit_damage_rolls, generate_instructions_from_move_pair,
 };
 use poke_engine::engine::items::Items;
 use poke_engine::engine::state::{MoveChoice, PokemonVolatileStatus, Terrain, Weather};
@@ -1063,7 +1063,7 @@ fn calculate_damage(
         None => {
             return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
                 "Invalid move for s2: {}",
-                side_one_move
+                side_two_move
             )))
         }
     }
@@ -1091,6 +1091,49 @@ fn calculate_damage(
 }
 
 #[pyfunction]
+fn calculate_single_hit_damage(
+    py_state: PyState,
+    side_one_move: String,
+    side_two_move: String,
+    side_one_moves_first: bool,
+) -> PyResult<(Vec<i16>, Vec<i16>)> {
+    let state: State = py_state.into();
+    let (mut s1_choice, mut s2_choice);
+    match MOVES.get(&Choices::from_str(side_one_move.as_str()).unwrap()) {
+        Some(m) => s1_choice = m.to_owned(),
+        None => {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "Invalid move for s1: {}",
+                side_one_move
+            )))
+        }
+    }
+    match MOVES.get(&Choices::from_str(side_two_move.as_str()).unwrap()) {
+        Some(m) => s2_choice = m.to_owned(),
+        None => {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "Invalid move for s2: {}",
+                side_one_move
+            )))
+        }
+    }
+    if side_one_move == "switch" {
+        s1_choice.category = MoveCategory::Switch
+    }
+    if side_two_move == "switch" {
+        s2_choice.category = MoveCategory::Switch
+    }
+
+    let (s1_damage_rolls, s2_damage_rolls) =
+        calculate_both_single_hit_damage_rolls(&state, s1_choice, s2_choice, side_one_moves_first);
+
+    Ok((
+        s1_damage_rolls.unwrap_or_else(|| vec![0, 0]),
+        s2_damage_rolls.unwrap_or_else(|| vec![0, 0]),
+    ))
+}
+
+#[pyfunction]
 fn calculate_damage_with_choices(
     py_state: PyState,
     side_one_move: String,
@@ -1111,12 +1154,8 @@ fn calculate_damage_with_choices(
         ))
     })?;
 
-    let (s1_damage_rolls, s2_damage_rolls) = calculate_both_damage_rolls_with_choices(
-        &state,
-        &s1_move,
-        &s2_move,
-        side_one_moves_first,
-    );
+    let (s1_damage_rolls, s2_damage_rolls) =
+        calculate_both_damage_rolls_with_choices(&state, &s1_move, &s2_move, side_one_moves_first);
 
     Ok((
         s1_damage_rolls.unwrap_or_else(|| vec![0, 0]),
@@ -1239,6 +1278,7 @@ fn calculate_damage_range_with_choices(
 #[pyo3(name = "poke_engine")]
 fn py_poke_engine(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(calculate_damage, m)?)?;
+    m.add_function(wrap_pyfunction!(calculate_single_hit_damage, m)?)?;
     m.add_function(wrap_pyfunction!(calculate_damage_with_choices, m)?)?;
     m.add_function(wrap_pyfunction!(calculate_damage_range, m)?)?;
     m.add_function(wrap_pyfunction!(calculate_damage_range_with_choices, m)?)?;

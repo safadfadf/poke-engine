@@ -1023,6 +1023,103 @@ fn compare_health_with_damage_multiples(max_damage: i16, health: i16) -> (i16, i
     (total_less_than / num_less_than, num_greater_than)
 }
 
+fn multi_hit_count_branches(
+    state: &State,
+    attacking_side: &SideReference,
+    choice: &Choice,
+) -> Vec<(i8, f32)> {
+    match choice.multi_hit() {
+        MultiHitMove::None => vec![(1, 1.0)],
+        MultiHitMove::DoubleHit => vec![(2, 1.0)],
+        MultiHitMove::TripleHit => vec![(3, 1.0)],
+        MultiHitMove::TwoToFiveHits => {
+            let attacker = state
+                .get_side_immutable(attacking_side)
+                .get_active_immutable();
+            if attacker.ability == Abilities::SKILLLINK {
+                vec![(5, 1.0)]
+            } else if attacker.item == Items::LOADEDDICE {
+                vec![(4, 0.5), (5, 0.5)]
+            } else {
+                vec![(2, 0.35), (3, 0.35), (4, 0.15), (5, 0.15)]
+            }
+        }
+        MultiHitMove::PopulationBomb => {
+            let attacker = state
+                .get_side_immutable(attacking_side)
+                .get_active_immutable();
+            if attacker.ability == Abilities::SKILLLINK {
+                return vec![(10, 1.0)];
+            }
+            let p = multi_accuracy_continue_probability(state, attacking_side, choice);
+            if attacker.item == Items::LOADEDDICE {
+                let mut branches = Vec::new();
+                for target_hits in 4..=10 {
+                    for (hits, probability) in multi_accuracy_hit_count_branches(target_hits, p) {
+                        add_hit_count_probability(&mut branches, hits, probability / 7.0);
+                    }
+                }
+                return branches
+                    .into_iter()
+                    .filter(|(_, probability)| *probability > 0.0)
+                    .collect();
+            }
+            // Population Bomb checks accuracy for each hit.  The move-hit check above
+            // already accounts for the first hit, so these probabilities are
+            // conditional on the first hit connecting.
+            multi_accuracy_hit_count_branches(10, p)
+        }
+        MultiHitMove::TripleAxel => {
+            let attacker = state
+                .get_side_immutable(attacking_side)
+                .get_active_immutable();
+            if attacker.ability == Abilities::SKILLLINK {
+                return vec![(3, 1.0)];
+            }
+            // Triple Axel checks accuracy for each hit.  The move-hit check above
+            // already accounts for the first hit, so these probabilities are
+            // conditional on the first hit connecting.  Damage per hit is still
+            // approximated elsewhere in the engine.
+            let p = multi_accuracy_continue_probability(state, attacking_side, choice);
+            multi_accuracy_hit_count_branches(3, p)
+        }
+    }
+}
+
+fn multi_accuracy_hit_count_branches(target_hits: i8, continue_probability: f32) -> Vec<(i8, f32)> {
+    let mut branches = Vec::with_capacity(target_hits.max(1) as usize);
+    let mut previous_hits_connected = 1.0;
+    for hits in 1..target_hits {
+        branches.push((hits, previous_hits_connected * (1.0 - continue_probability)));
+        previous_hits_connected *= continue_probability;
+    }
+    branches.push((target_hits, previous_hits_connected));
+    branches
+        .into_iter()
+        .filter(|(_, probability)| *probability > 0.0)
+        .collect()
+}
+
+fn add_hit_count_probability(branches: &mut Vec<(i8, f32)>, hits: i8, probability: f32) {
+    if let Some((_, existing_probability)) = branches
+        .iter_mut()
+        .find(|(existing_hits, _)| *existing_hits == hits)
+    {
+        *existing_probability += probability;
+    } else {
+        branches.push((hits, probability));
+    }
+}
+
+fn multi_accuracy_continue_probability(
+    state: &State,
+    attacking_side: &SideReference,
+    choice: &Choice,
+) -> f32 {
+    let attacking_side_state = state.get_side_immutable(attacking_side);
+    ((choice.accuracy / 100.0) * boosted_accuracy(attacking_side_state.accuracy_boost)).min(1.0)
+}
+
 fn get_instructions_from_secondaries(
     state: &mut State,
     attacker_choice: &Choice,
@@ -2370,42 +2467,7 @@ pub fn generate_instructions_from_move(
         return;
     }
 
-    // start multi-hit
-    let hit_count;
-    match choice.multi_hit() {
-        MultiHitMove::None => {
-            hit_count = 1;
-        }
-        MultiHitMove::DoubleHit => {
-            hit_count = 2;
-        }
-        MultiHitMove::TripleHit => {
-            hit_count = 3;
-        }
-        MultiHitMove::TwoToFiveHits => {
-            hit_count =
-                if state.get_side(&attacking_side).get_active().ability == Abilities::SKILLLINK {
-                    5
-                } else if state.get_side(&attacking_side).get_active().item == Items::LOADEDDICE {
-                    4
-                } else {
-                    3 // too lazy to implement branching here. Average is 3.2 so this is a fine approximation
-                };
-        }
-        MultiHitMove::PopulationBomb => {
-            // population bomb checks accuracy each time but lets approximate
-            hit_count = if state.get_side(&attacking_side).get_active().item == Items::WIDELENS {
-                9
-            } else {
-                6
-            };
-        }
-        MultiHitMove::TripleAxel => {
-            // triple axel checks accuracy each time but until multi-accuracy is implemented this
-            // is the best we can do
-            hit_count = 3
-        }
-    }
+    let hit_count_branches = multi_hit_count_branches(state, &attacking_side, &choice);
 
     let (_attacker_side, defender_side) = state.get_both_sides(&attacking_side);
     let defender_active = defender_side.get_active();
@@ -2469,11 +2531,11 @@ pub fn generate_instructions_from_move(
     }
 
     if incoming_instructions.percentage != 0.0 {
-        run_move(
+        run_move_hit_count_branches(
             state,
             attacking_side,
             incoming_instructions,
-            hit_count,
+            &hit_count_branches,
             does_damage,
             regular_damage,
             choice,
@@ -2488,11 +2550,11 @@ pub fn generate_instructions_from_move(
     if let Some(branch_ins) = branch_instructions {
         if branch_ins.percentage != 0.0 {
             state.apply_instructions(&branch_ins.instruction_list);
-            run_move(
+            run_move_hit_count_branches(
                 state,
                 attacking_side,
                 branch_ins,
-                hit_count,
+                &hit_count_branches,
                 does_damage,
                 branch_damage,
                 choice,
@@ -3816,6 +3878,52 @@ fn run_move(
     }
 }
 
+fn run_move_hit_count_branches(
+    state: &mut State,
+    attacking_side: SideReference,
+    instructions: StateInstructions,
+    hit_count_branches: &[(i8, f32)],
+    does_damage: bool,
+    damage_amount: i16,
+    choice: &Choice,
+    defender_choice: &Choice,
+    final_instructions: &mut Vec<StateInstructions>,
+) {
+    let mut ran_branch = false;
+    for (hit_count, probability) in hit_count_branches {
+        if *hit_count <= 0 || *probability <= 0.0 {
+            continue;
+        }
+        let mut branch_instructions = instructions.clone();
+        branch_instructions.update_percentage(*probability);
+        if branch_instructions.percentage == 0.0 {
+            continue;
+        }
+
+        if ran_branch {
+            state.apply_instructions(&branch_instructions.instruction_list);
+        }
+
+        let mut branch_choice = choice.clone();
+        run_move(
+            state,
+            attacking_side,
+            branch_instructions,
+            *hit_count,
+            does_damage,
+            damage_amount,
+            &mut branch_choice,
+            defender_choice,
+            final_instructions,
+        );
+        ran_branch = true;
+    }
+
+    if !ran_branch {
+        state.reverse_instructions(&instructions.instruction_list);
+    }
+}
+
 fn after_move_finish(state: &mut State, final_instructions: &mut Vec<StateInstructions>) {
     for state_instructions in final_instructions.iter_mut() {
         state.apply_instructions(&state_instructions.instruction_list);
@@ -4266,6 +4374,15 @@ pub fn calculate_damage_rolls(
     )
 }
 
+pub fn calculate_single_hit_damage_rolls(
+    state: State,
+    attacking_side_ref: &SideReference,
+    choice: Choice,
+    defending_choice: &Choice,
+) -> Option<Vec<i16>> {
+    calculate_damage_rolls(state, attacking_side_ref, choice, defending_choice)
+}
+
 pub fn calculate_both_damage_rolls(
     state: &State,
     mut s1_choice: Choice,
@@ -4294,6 +4411,15 @@ pub fn calculate_both_damage_rolls(
     );
 
     (damages_dealt_s1, damages_dealt_s2)
+}
+
+pub fn calculate_both_single_hit_damage_rolls(
+    state: &State,
+    s1_choice: Choice,
+    s2_choice: Choice,
+    side_one_moves_first: bool,
+) -> (Option<Vec<i16>>, Option<Vec<i16>>) {
+    calculate_both_damage_rolls(state, s1_choice, s2_choice, side_one_moves_first)
 }
 
 fn choice_from_move_choice(

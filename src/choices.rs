@@ -20569,7 +20569,7 @@ impl Choice {
             // These are multi-accuracy
             // but until that is implemented we approximate them as multi-hit
             Choices::POPULATIONBOMB => MultiHitMove::PopulationBomb,
-            Choices::TRIPLEAXEL => MultiHitMove::TripleAxel,
+            Choices::TRIPLEAXEL | Choices::TRIPLEKICK => MultiHitMove::TripleAxel,
             _ => MultiHitMove::None,
         }
     }

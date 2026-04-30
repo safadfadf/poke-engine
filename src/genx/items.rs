@@ -1154,6 +1154,9 @@ pub fn item_modify_attack_being_used(
                 attacking_choice.base_power *= 1.5;
             }
         }
+        Items::WIDELENS => {
+            attacking_choice.accuracy *= 1.1;
+        }
         #[cfg(feature = "gen3")]
         Items::DRAGONFANG | Items::DRAGONSCALE => {
             if attacking_choice.move_type == PokemonType::DRAGON {

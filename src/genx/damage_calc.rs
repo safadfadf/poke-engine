@@ -148,8 +148,8 @@ fn weather_modifier(attacking_move_type: &PokemonType, weather: &Weather) -> f32
     }
 }
 
-fn damage_weather_for_attacker(state: &State, attacker: &Pokemon) -> Weather {
-    if attacker.ability == Abilities::MEGASOL {
+fn damage_weather_for_attacker(state: &State, attacker: &Pokemon, defender: &Pokemon) -> Weather {
+    if attacker.ability == Abilities::MEGASOL && defender.ability != Abilities::NEUTRALIZINGGAS {
         Weather::HARSHSUN
     } else {
         state.weather.weather_type
@@ -592,7 +592,7 @@ pub fn calculate_damage(
         defending_side,
         defender,
         defending_stat,
-        &damage_weather_for_attacker(state, attacker),
+        &damage_weather_for_attacker(state, attacker, defender),
         &state.terrain.terrain_type,
         choice,
     );
@@ -617,7 +617,7 @@ pub fn calculate_damage(
         defending_side,
         defender,
         crit_defending_stat,
-        &damage_weather_for_attacker(state, attacker),
+        &damage_weather_for_attacker(state, attacker, defender),
         &state.terrain.terrain_type,
         choice,
     );

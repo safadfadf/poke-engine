@@ -33,8 +33,14 @@ const CHOICE_THAWS_USER: [Choices; 10] = [
     Choices::MATCHAGOTCHA,
 ];
 
-fn move_weather_for_attacker(state: &State, attacking_side: &Side) -> Weather {
-    if attacking_side.get_active_immutable().ability == Abilities::MEGASOL {
+fn move_weather_for_attacker(
+    state: &State,
+    attacking_side: &Side,
+    defending_side: &Side,
+) -> Weather {
+    if attacking_side.get_active_immutable().ability == Abilities::MEGASOL
+        && defending_side.get_active_immutable().ability != Abilities::NEUTRALIZINGGAS
+    {
         return Weather::HARSHSUN;
     }
 
@@ -61,7 +67,7 @@ pub fn modify_choice(
     attacking_side_ref: &SideReference,
 ) {
     let (attacking_side, defending_side) = state.get_both_sides_immutable(attacking_side_ref);
-    let attacker_move_weather = move_weather_for_attacker(state, attacking_side);
+    let attacker_move_weather = move_weather_for_attacker(state, attacking_side, defending_side);
     match attacker_choice.move_id {
         Choices::ROOST => {
             let attacker = attacking_side.get_active_immutable();

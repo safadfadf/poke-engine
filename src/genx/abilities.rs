@@ -683,8 +683,6 @@ pub fn ability_after_damage_hit(
     damage_dealt: i16,
     instructions: &mut StateInstructions,
 ) {
-    let attacker_is_burn_immune =
-        immune_to_status(state, &MoveTarget::User, side_ref, &PokemonStatus::BURN);
     let (attacking_side, defending_side) = state.get_both_sides(side_ref);
     let active_pkmn = attacking_side.get_active();
     if defending_side.get_active_immutable().ability == Abilities::NEUTRALIZINGGAS
@@ -784,7 +782,6 @@ pub fn ability_after_damage_hit(
         }
         _ => {}
     }
-    let attacking_side_active_index = attacking_side.active_index;
     let (attacking_side, defending_side) = state.get_both_sides(side_ref);
     let attacking_pkmn = attacking_side.get_active();
     let defending_pkmn = defending_side.get_active();
@@ -958,16 +955,8 @@ pub fn ability_after_damage_hit(
             }
         }
         Abilities::SPICYSPRAY => {
-            if damage_dealt > 0 && !attacker_is_burn_immune {
-                instructions
-                    .instruction_list
-                    .push(Instruction::ChangeStatus(ChangeStatusInstruction {
-                        side_ref: *side_ref,
-                        pokemon_index: attacking_side_active_index,
-                        old_status: attacking_pkmn.status,
-                        new_status: PokemonStatus::BURN,
-                    }));
-                attacking_pkmn.status = PokemonStatus::BURN;
+            if damage_dealt > 0 {
+                apply_spicy_spray_burn(state, side_ref, instructions);
             }
         }
         Abilities::AFTERMATH => {
@@ -1032,6 +1021,41 @@ pub fn ability_after_damage_hit(
             }
         }
         _ => {}
+    }
+}
+
+fn apply_spicy_spray_burn(
+    state: &mut State,
+    side_ref: &SideReference,
+    instructions: &mut StateInstructions,
+) {
+    if immune_to_status(state, &MoveTarget::User, side_ref, &PokemonStatus::BURN) {
+        return;
+    }
+
+    let attacking_side = state.get_side(side_ref);
+    let active_index = attacking_side.active_index;
+    let attacking_pkmn = attacking_side.get_active();
+
+    if attacking_pkmn.item == Items::LUMBERRY {
+        instructions
+            .instruction_list
+            .push(Instruction::ChangeItem(ChangeItemInstruction {
+                side_ref: *side_ref,
+                current_item: Items::LUMBERRY,
+                new_item: Items::NONE,
+            }));
+        attacking_pkmn.item = Items::NONE;
+    } else {
+        instructions
+            .instruction_list
+            .push(Instruction::ChangeStatus(ChangeStatusInstruction {
+                side_ref: *side_ref,
+                pokemon_index: active_index,
+                old_status: attacking_pkmn.status,
+                new_status: PokemonStatus::BURN,
+            }));
+        attacking_pkmn.status = PokemonStatus::BURN;
     }
 }
 

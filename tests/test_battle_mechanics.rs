@@ -3,7 +3,7 @@
 use poke_engine::choices::{Choice, Choices, MoveCategory, MOVES};
 use poke_engine::engine::abilities::{Abilities, WEATHER_ABILITY_TURNS};
 use poke_engine::engine::choice_effects::modify_choice;
-use poke_engine::engine::damage_calc::CRIT_MULTIPLIER;
+use poke_engine::engine::damage_calc::{calculate_damage, DamageRolls, CRIT_MULTIPLIER};
 use poke_engine::engine::generate_instructions::{
     generate_instructions_from_move_pair, BASE_CRIT_CHANCE, CONSECUTIVE_PROTECT_CHANCE,
     MAX_SLEEP_TURNS,
@@ -5914,6 +5914,25 @@ fn test_mega_sol_weatherball_uses_harsh_sun_without_setting_weather() {
 }
 
 #[test]
+fn test_mega_sol_weatherball_is_suppressed_by_neutralizing_gas() {
+    let defender_choice = Choice::default();
+    let mut choice = MOVES.get(&Choices::WEATHERBALL).unwrap().to_owned();
+    let mut state = State::default();
+    state.side_one.get_active().ability = Abilities::MEGASOL;
+    state.side_two.get_active().ability = Abilities::NEUTRALIZINGGAS;
+
+    modify_choice(
+        &state,
+        &mut choice,
+        &defender_choice,
+        &SideReference::SideOne,
+    );
+
+    assert_eq!(PokemonType::NORMAL, choice.move_type);
+    assert_eq!(50.0, choice.base_power);
+}
+
+#[test]
 fn test_mega_sol_solarbeam_does_not_charge_without_weather() {
     let state = State::default();
     let defender_choice = Choice::default();
@@ -5937,6 +5956,44 @@ fn test_mega_sol_solarbeam_does_not_charge_without_weather() {
 
     assert!(normal_choice.flags.charge);
     assert!(!mega_sol_choice.flags.charge);
+}
+
+#[test]
+fn test_mega_sol_damage_weather_is_suppressed_by_neutralizing_gas() {
+    let normal_state = State::default();
+    let mut mega_sol_state = State::default();
+    let choice = MOVES.get(&Choices::EMBER).unwrap().to_owned();
+    mega_sol_state.side_one.get_active().ability = Abilities::MEGASOL;
+
+    let normal_damage = calculate_damage(
+        &normal_state,
+        &SideReference::SideOne,
+        &choice,
+        DamageRolls::Max,
+    )
+    .unwrap()
+    .0;
+    let mega_sol_damage = calculate_damage(
+        &mega_sol_state,
+        &SideReference::SideOne,
+        &choice,
+        DamageRolls::Max,
+    )
+    .unwrap()
+    .0;
+
+    mega_sol_state.side_two.get_active().ability = Abilities::NEUTRALIZINGGAS;
+    let suppressed_damage = calculate_damage(
+        &mega_sol_state,
+        &SideReference::SideOne,
+        &choice,
+        DamageRolls::Max,
+    )
+    .unwrap()
+    .0;
+
+    assert!(mega_sol_damage > normal_damage);
+    assert_eq!(normal_damage, suppressed_damage);
 }
 
 #[test]
@@ -6018,6 +6075,54 @@ fn test_spicy_spray_burns_attacker_after_damage() {
         })],
         instructions.instruction_list
     );
+}
+
+#[test]
+fn test_spicy_spray_lum_berry_cures_burn() {
+    let mut state = State::default();
+    state.side_one.get_active().item = Items::LUMBERRY;
+    state.side_two.get_active().ability = Abilities::SPICYSPRAY;
+    let mut choice = MOVES.get(&Choices::TACKLE).unwrap().to_owned();
+    let mut instructions = StateInstructions::default();
+
+    poke_engine::engine::abilities::ability_after_damage_hit(
+        &mut state,
+        &mut choice,
+        &SideReference::SideOne,
+        1,
+        &mut instructions,
+    );
+
+    assert_eq!(PokemonStatus::NONE, state.side_one.get_active().status);
+    assert_eq!(Items::NONE, state.side_one.get_active().item);
+    assert_eq!(
+        vec![Instruction::ChangeItem(ChangeItemInstruction {
+            side_ref: SideReference::SideOne,
+            current_item: Items::LUMBERRY,
+            new_item: Items::NONE,
+        })],
+        instructions.instruction_list
+    );
+}
+
+#[test]
+fn test_spicy_spray_is_suppressed_by_neutralizing_gas() {
+    let mut state = State::default();
+    state.side_one.get_active().ability = Abilities::NEUTRALIZINGGAS;
+    state.side_two.get_active().ability = Abilities::SPICYSPRAY;
+    let mut choice = MOVES.get(&Choices::TACKLE).unwrap().to_owned();
+    let mut instructions = StateInstructions::default();
+
+    poke_engine::engine::abilities::ability_after_damage_hit(
+        &mut state,
+        &mut choice,
+        &SideReference::SideOne,
+        1,
+        &mut instructions,
+    );
+
+    assert_eq!(PokemonStatus::NONE, state.side_one.get_active().status);
+    assert!(instructions.instruction_list.is_empty());
 }
 
 #[test]

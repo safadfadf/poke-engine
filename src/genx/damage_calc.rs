@@ -149,8 +149,12 @@ fn weather_modifier(attacking_move_type: &PokemonType, weather: &Weather) -> f32
 }
 
 fn damage_weather_for_attacker(state: &State, attacker: &Pokemon, defender: &Pokemon) -> Weather {
-    if attacker.ability == Abilities::MEGASOL && defender.ability != Abilities::NEUTRALIZINGGAS {
-        Weather::HARSHSUN
+    if attacker.ability == Abilities::MEGASOL
+        && defender.ability != Abilities::NEUTRALIZINGGAS
+        && defender.ability != Abilities::CLOUDNINE
+        && defender.ability != Abilities::AIRLOCK
+    {
+        Weather::SUN
     } else {
         state.weather.weather_type
     }

@@ -5894,7 +5894,7 @@ fn test_weatherball_in_sun() {
 }
 
 #[test]
-fn test_mega_sol_weatherball_uses_harsh_sun_without_setting_weather() {
+fn test_mega_sol_weatherball_uses_sun_without_setting_weather() {
     let state = State::default();
     let mut choice = MOVES.get(&Choices::WEATHERBALL).unwrap().to_owned();
     let defender_choice = Choice::default();
@@ -5933,6 +5933,27 @@ fn test_mega_sol_weatherball_is_suppressed_by_neutralizing_gas() {
 }
 
 #[test]
+fn test_mega_sol_weatherball_is_suppressed_by_weather_suppressing_abilities() {
+    for ability in [Abilities::CLOUDNINE, Abilities::AIRLOCK] {
+        let defender_choice = Choice::default();
+        let mut choice = MOVES.get(&Choices::WEATHERBALL).unwrap().to_owned();
+        let mut state = State::default();
+        state.side_one.get_active().ability = Abilities::MEGASOL;
+        state.side_two.get_active().ability = ability;
+
+        modify_choice(
+            &state,
+            &mut choice,
+            &defender_choice,
+            &SideReference::SideOne,
+        );
+
+        assert_eq!(PokemonType::NORMAL, choice.move_type);
+        assert_eq!(50.0, choice.base_power);
+    }
+}
+
+#[test]
 fn test_mega_sol_solarbeam_does_not_charge_without_weather() {
     let state = State::default();
     let defender_choice = Choice::default();
@@ -5956,6 +5977,46 @@ fn test_mega_sol_solarbeam_does_not_charge_without_weather() {
 
     assert!(normal_choice.flags.charge);
     assert!(!mega_sol_choice.flags.charge);
+}
+
+#[test]
+fn test_mega_sol_damage_uses_regular_sun_not_harsh_sun() {
+    let mut sun_state = State::default();
+    let mut harsh_sun_state = State::default();
+    let mut mega_sol_state = State::default();
+    let choice = MOVES.get(&Choices::WATERGUN).unwrap().to_owned();
+
+    sun_state.weather.weather_type = Weather::SUN;
+    harsh_sun_state.weather.weather_type = Weather::HARSHSUN;
+    mega_sol_state.side_one.get_active().ability = Abilities::MEGASOL;
+
+    let sun_damage = calculate_damage(
+        &sun_state,
+        &SideReference::SideOne,
+        &choice,
+        DamageRolls::Max,
+    )
+    .unwrap()
+    .0;
+    let harsh_sun_damage = calculate_damage(
+        &harsh_sun_state,
+        &SideReference::SideOne,
+        &choice,
+        DamageRolls::Max,
+    )
+    .unwrap()
+    .0;
+    let mega_sol_damage = calculate_damage(
+        &mega_sol_state,
+        &SideReference::SideOne,
+        &choice,
+        DamageRolls::Max,
+    )
+    .unwrap()
+    .0;
+
+    assert_eq!(0, harsh_sun_damage);
+    assert_eq!(sun_damage, mega_sol_damage);
 }
 
 #[test]

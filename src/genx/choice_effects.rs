@@ -38,10 +38,13 @@ fn move_weather_for_attacker(
     attacking_side: &Side,
     defending_side: &Side,
 ) -> Weather {
+    let defending_ability = defending_side.get_active_immutable().ability;
     if attacking_side.get_active_immutable().ability == Abilities::MEGASOL
-        && defending_side.get_active_immutable().ability != Abilities::NEUTRALIZINGGAS
+        && defending_ability != Abilities::NEUTRALIZINGGAS
+        && defending_ability != Abilities::CLOUDNINE
+        && defending_ability != Abilities::AIRLOCK
     {
-        return Weather::HARSHSUN;
+        return Weather::SUN;
     }
 
     for weather in [

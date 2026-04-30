@@ -148,6 +148,14 @@ fn weather_modifier(attacking_move_type: &PokemonType, weather: &Weather) -> f32
     }
 }
 
+fn damage_weather_for_attacker(state: &State, attacker: &Pokemon) -> Weather {
+    if attacker.ability == Abilities::MEGASOL {
+        Weather::HARSHSUN
+    } else {
+        state.weather.weather_type
+    }
+}
+
 fn stab_modifier(attacking_move_type: &PokemonType, active_pkmn: &Pokemon) -> f32 {
     if attacking_move_type == &PokemonType::TYPELESS {
         return 1.0;
@@ -531,8 +539,8 @@ fn common_pkmn_damage_calc(
         damage_modifier *= _type_effectiveness_modifier(&choice.move_type, &defender_types);
     }
 
-    if attacker.ability != Abilities::CLOUDNINE
-        && attacker.ability != Abilities::AIRLOCK
+    if (attacker.ability == Abilities::MEGASOL
+        || (attacker.ability != Abilities::CLOUDNINE && attacker.ability != Abilities::AIRLOCK))
         && defender.ability != Abilities::CLOUDNINE
         && defender.ability != Abilities::AIRLOCK
     {
@@ -584,7 +592,7 @@ pub fn calculate_damage(
         defending_side,
         defender,
         defending_stat,
-        &state.weather.weather_type,
+        &damage_weather_for_attacker(state, attacker),
         &state.terrain.terrain_type,
         choice,
     );
@@ -609,7 +617,7 @@ pub fn calculate_damage(
         defending_side,
         defender,
         crit_defending_stat,
-        &state.weather.weather_type,
+        &damage_weather_for_attacker(state, attacker),
         &state.terrain.terrain_type,
         choice,
     );

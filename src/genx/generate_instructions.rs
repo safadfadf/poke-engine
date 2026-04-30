@@ -1706,7 +1706,7 @@ fn before_move(
         && choice.flags.protect
     {
         if choice.bypasses_protect {
-            choice.protected_damage_multiplier = 0.25;
+            choice.protected_damage_multiplier = choice.protect_bypass_damage_multiplier;
         } else {
             choice.remove_effects_for_protect();
             if choice.crash.is_some() {

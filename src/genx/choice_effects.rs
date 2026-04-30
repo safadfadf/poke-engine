@@ -33,6 +33,27 @@ const CHOICE_THAWS_USER: [Choices; 10] = [
     Choices::MATCHAGOTCHA,
 ];
 
+fn move_weather_for_attacker(state: &State, attacking_side: &Side) -> Weather {
+    if attacking_side.get_active_immutable().ability == Abilities::MEGASOL {
+        return Weather::HARSHSUN;
+    }
+
+    for weather in [
+        Weather::HARSHSUN,
+        Weather::HEAVYRAIN,
+        Weather::SUN,
+        Weather::RAIN,
+        Weather::SAND,
+        Weather::SNOW,
+        Weather::HAIL,
+    ] {
+        if state.weather_is_active(&weather) {
+            return weather;
+        }
+    }
+    Weather::NONE
+}
+
 pub fn modify_choice(
     state: &State,
     attacker_choice: &mut Choice,
@@ -40,6 +61,7 @@ pub fn modify_choice(
     attacking_side_ref: &SideReference,
 ) {
     let (attacking_side, defending_side) = state.get_both_sides_immutable(attacking_side_ref);
+    let attacker_move_weather = move_weather_for_attacker(state, attacking_side);
     match attacker_choice.move_id {
         Choices::ROOST => {
             let attacker = attacking_side.get_active_immutable();
@@ -48,7 +70,7 @@ pub fn modify_choice(
             }
         }
         Choices::ELECTROSHOT => {
-            if state.weather_is_active(&Weather::RAIN) {
+            if matches!(attacker_move_weather, Weather::RAIN | Weather::HEAVYRAIN) {
                 attacker_choice.flags.charge = false;
             }
         }
@@ -215,7 +237,7 @@ pub fn modify_choice(
             _ => {}
         },
         Choices::GROWTH => {
-            if state.weather_is_active(&Weather::SUN) {
+            if matches!(attacker_move_weather, Weather::SUN | Weather::HARSHSUN) {
                 attacker_choice.boost = Some(Boost {
                     target: MoveTarget::User,
                     boosts: StatBoosts {
@@ -235,7 +257,7 @@ pub fn modify_choice(
             }
         }
         Choices::HYDROSTEAM => {
-            if state.weather_is_active(&Weather::SUN) {
+            if matches!(attacker_move_weather, Weather::SUN | Weather::HARSHSUN) {
                 attacker_choice.base_power *= 3.0; // 1.5x for being in sun, 2x for cancelling out rain debuff
             }
         }
@@ -256,8 +278,8 @@ pub fn modify_choice(
         }
 
         Choices::MORNINGSUN | Choices::MOONLIGHT | Choices::SYNTHESIS => {
-            match state.weather.weather_type {
-                Weather::SUN => {
+            match attacker_move_weather {
+                Weather::SUN | Weather::HARSHSUN => {
                     attacker_choice.heal = Some(Heal {
                         target: MoveTarget::User,
                         amount: 0.667,
@@ -409,7 +431,7 @@ pub fn modify_choice(
                 attacker_choice.accuracy = 100.0;
             }
         }
-        Choices::WEATHERBALL => match state.weather.weather_type {
+        Choices::WEATHERBALL => match attacker_move_weather {
             Weather::SUN | Weather::HARSHSUN => {
                 attacker_choice.base_power = 100.0;
                 attacker_choice.move_type = PokemonType::FIRE;
@@ -429,12 +451,9 @@ pub fn modify_choice(
             Weather::NONE => {}
         },
         Choices::SOLARBEAM | Choices::SOLARBLADE => {
-            if state.weather_is_active(&Weather::SUN) || state.weather_is_active(&Weather::HARSHSUN)
-            {
+            if matches!(attacker_move_weather, Weather::SUN | Weather::HARSHSUN) {
                 attacker_choice.flags.charge = false;
-            } else if !state.weather_is_active(&Weather::SUN)
-                && state.weather.weather_type != Weather::NONE
-            {
+            } else if attacker_move_weather != Weather::NONE {
                 attacker_choice.base_power /= 2.0;
             }
         }
@@ -444,13 +463,9 @@ pub fn modify_choice(
             }
         }
         Choices::HURRICANE | Choices::THUNDER => {
-            if state.weather_is_active(&Weather::RAIN)
-                || state.weather_is_active(&Weather::HEAVYRAIN)
-            {
+            if matches!(attacker_move_weather, Weather::RAIN | Weather::HEAVYRAIN) {
                 attacker_choice.accuracy = 100.0;
-            } else if state.weather_is_active(&Weather::SUN)
-                || state.weather_is_active(&Weather::HARSHSUN)
-            {
+            } else if matches!(attacker_move_weather, Weather::SUN | Weather::HARSHSUN) {
                 attacker_choice.accuracy = 50.0;
             }
         }

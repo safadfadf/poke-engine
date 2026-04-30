@@ -1,7 +1,8 @@
 #![cfg(not(any(feature = "gen1", feature = "gen2", feature = "gen3")))]
 
-use poke_engine::choices::{Choices, MoveCategory, MOVES};
+use poke_engine::choices::{Choice, Choices, MoveCategory, MOVES};
 use poke_engine::engine::abilities::{Abilities, WEATHER_ABILITY_TURNS};
+use poke_engine::engine::choice_effects::modify_choice;
 use poke_engine::engine::damage_calc::CRIT_MULTIPLIER;
 use poke_engine::engine::generate_instructions::{
     generate_instructions_from_move_pair, BASE_CRIT_CHANCE, CONSECUTIVE_PROTECT_CHANCE,
@@ -5893,6 +5894,133 @@ fn test_weatherball_in_sun() {
 }
 
 #[test]
+fn test_mega_sol_weatherball_uses_harsh_sun_without_setting_weather() {
+    let state = State::default();
+    let mut choice = MOVES.get(&Choices::WEATHERBALL).unwrap().to_owned();
+    let defender_choice = Choice::default();
+    let mut mega_sol_state = state.clone();
+    mega_sol_state.side_one.get_active().ability = Abilities::MEGASOL;
+
+    modify_choice(
+        &mega_sol_state,
+        &mut choice,
+        &defender_choice,
+        &SideReference::SideOne,
+    );
+
+    assert_eq!(PokemonType::FIRE, choice.move_type);
+    assert_eq!(100.0, choice.base_power);
+    assert_eq!(Weather::NONE, mega_sol_state.weather.weather_type);
+}
+
+#[test]
+fn test_mega_sol_solarbeam_does_not_charge_without_weather() {
+    let state = State::default();
+    let defender_choice = Choice::default();
+    let mut normal_choice = MOVES.get(&Choices::SOLARBEAM).unwrap().to_owned();
+    let mut mega_sol_choice = MOVES.get(&Choices::SOLARBEAM).unwrap().to_owned();
+    let mut mega_sol_state = state.clone();
+    mega_sol_state.side_one.get_active().ability = Abilities::MEGASOL;
+
+    modify_choice(
+        &state,
+        &mut normal_choice,
+        &defender_choice,
+        &SideReference::SideOne,
+    );
+    modify_choice(
+        &mega_sol_state,
+        &mut mega_sol_choice,
+        &defender_choice,
+        &SideReference::SideOne,
+    );
+
+    assert!(normal_choice.flags.charge);
+    assert!(!mega_sol_choice.flags.charge);
+}
+
+#[test]
+fn test_dragonize_changes_normal_moves_to_dragon_and_boosts_power() {
+    let mut state = State::default();
+    state.side_one.get_active().ability = Abilities::DRAGONIZE;
+    let mut choice = MOVES.get(&Choices::TACKLE).unwrap().to_owned();
+    let defender_choice = Choice::default();
+
+    poke_engine::engine::abilities::ability_modify_attack_being_used(
+        &state,
+        &mut choice,
+        &defender_choice,
+        &SideReference::SideOne,
+    );
+
+    assert_eq!(PokemonType::DRAGON, choice.move_type);
+    assert_eq!(48.0, choice.base_power);
+}
+
+#[test]
+fn test_piercing_drill_contact_moves_bypass_protect_for_quarter_damage() {
+    let mut state = State::default();
+    state.side_one.get_active().ability = Abilities::PIERCINGDRILL;
+
+    let vec_of_instructions = set_moves_on_pkmn_and_call_generate_instructions(
+        &mut state,
+        Choices::TACKLE,
+        Choices::PROTECT,
+    );
+
+    let expected_instructions = vec![StateInstructions {
+        percentage: 100.0,
+        instruction_list: vec![
+            Instruction::ApplyVolatileStatus(ApplyVolatileStatusInstruction {
+                side_ref: SideReference::SideTwo,
+                volatile_status: PokemonVolatileStatus::PROTECT,
+            }),
+            Instruction::Damage(DamageInstruction {
+                side_ref: SideReference::SideTwo,
+                damage_amount: 12,
+            }),
+            Instruction::RemoveVolatileStatus(RemoveVolatileStatusInstruction {
+                side_ref: SideReference::SideTwo,
+                volatile_status: PokemonVolatileStatus::PROTECT,
+            }),
+            Instruction::ChangeSideCondition(ChangeSideConditionInstruction {
+                side_ref: SideReference::SideTwo,
+                side_condition: PokemonSideCondition::Protect,
+                amount: 1,
+            }),
+        ],
+    }];
+    assert_eq!(expected_instructions, vec_of_instructions);
+}
+
+#[test]
+fn test_spicy_spray_burns_attacker_after_damage() {
+    let mut state = State::default();
+    state.side_two.get_active().ability = Abilities::SPICYSPRAY;
+    let mut choice = MOVES.get(&Choices::TACKLE).unwrap().to_owned();
+    let mut instructions = StateInstructions::default();
+
+    poke_engine::engine::abilities::ability_after_damage_hit(
+        &mut state,
+        &mut choice,
+        &SideReference::SideOne,
+        1,
+        &mut instructions,
+    );
+
+    assert_eq!(PokemonStatus::BURN, state.side_one.get_active().status);
+    assert_eq!(
+        vec![Instruction::ChangeStatus(ChangeStatusInstruction {
+            side_ref: SideReference::SideOne,
+            pokemon_index: PokemonIndex::P0,
+            old_status: PokemonStatus::NONE,
+            new_status: PokemonStatus::BURN,
+        })],
+        instructions.instruction_list
+    );
+}
+
+#[test]
 #[cfg(any(feature = "gen9"))]
 fn test_terrainpulse_gen9() {
     let mut state = State::default();
@@ -8041,6 +8169,24 @@ fn test_mega_evolve_options_side_one() {
         ],
         side_two_moves
     );
+}
+
+#[test]
+#[cfg(not(feature = "terastallization"))]
+fn test_champions_mega_evolve_options_side_one() {
+    let mut state = State::default();
+    state.side_one.get_active().id = PokemonName::MEGANIUM;
+    state.side_one.get_active().item = Items::MEGANIUMITE;
+    state.side_one.pokemon[PokemonIndex::P1].id = PokemonName::GRENINJA;
+    state.side_one.pokemon[PokemonIndex::P1].item = Items::GRENINJITE;
+
+    let (side_one_moves, _side_two_moves) = state.get_all_options();
+
+    assert!(side_one_moves.contains(&MoveChoice::MoveMega(PokemonMoveIndex::M0)));
+    assert!(side_one_moves.contains(&MoveChoice::MoveMega(PokemonMoveIndex::M1)));
+    assert!(side_one_moves.contains(&MoveChoice::MoveMega(PokemonMoveIndex::M2)));
+    assert!(side_one_moves.contains(&MoveChoice::MoveMega(PokemonMoveIndex::M3)));
+    assert!(state.side_one.pokemon[PokemonIndex::P1].can_mega_evolve());
 }
 
 #[test]

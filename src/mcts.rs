@@ -11,7 +11,6 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 const MCTS_MAX_ITERATIONS_PER_TREE: u32 = 10_000_000;
-const DEFAULT_MAX_ROOT_PARALLELISM: usize = 8;
 const MCTS_THREADS_ENV: &str = "POKE_ENGINE_MCTS_THREADS";
 const MCTS_SYNC_TREE_DROP_ENV: &str = "POKE_ENGINE_MCTS_SYNC_TREE_DROP";
 
@@ -281,12 +280,15 @@ fn mcts_worker_count() -> usize {
         .map(|parallelism| parallelism.get())
         .unwrap_or(1);
 
+    // Root-parallel MCTS builds independent trees and merges only root stats.
+    // That is faster, but it is not equivalent to the legacy single-tree search,
+    // so keep it opt-in for callers that prefer speed over identical policy.
     std::env::var(MCTS_THREADS_ENV)
         .ok()
         .and_then(|value| value.parse::<usize>().ok())
         .filter(|value| *value > 0)
         .map(|value| value.min(available_parallelism))
-        .unwrap_or_else(|| available_parallelism.min(DEFAULT_MAX_ROOT_PARALLELISM))
+        .unwrap_or(1)
         .max(1)
 }
 

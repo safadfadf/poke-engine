@@ -190,7 +190,7 @@ pub fn modify_choice(
             // Technically not correct because of reviving moves but good enough
             let mut bp = 50.0;
             for pkmn in attacking_side.pokemon.into_iter() {
-                if pkmn.hp == 0 {
+                if pkmn.id != PokemonName::NONE && pkmn.hp == 0 {
                     bp += 50.0;
                 }
             }

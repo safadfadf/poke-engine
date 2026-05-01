@@ -892,7 +892,7 @@ impl Side {
     pub fn num_fainted_pkmn(&self) -> i8 {
         let mut count = 0;
         for p in self.pokemon.into_iter() {
-            if p.hp == 0 {
+            if p.id != PokemonName::NONE && p.hp == 0 {
                 count += 1;
             }
         }

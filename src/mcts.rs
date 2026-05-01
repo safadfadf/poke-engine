@@ -24,7 +24,7 @@ fn sigmoid(x: f32) -> f32 {
 pub struct Node {
     pub root: bool,
     pub parent: *mut Node,
-    pub children: HashMap<(usize, usize), Vec<Node>>,
+    pub children: Option<Box<HashMap<(usize, usize), Vec<Node>>>>,
     pub times_visited: u32,
 
     // represents the instructions & s1/s2 moves that led to this node from the parent
@@ -45,7 +45,7 @@ impl Node {
             parent: std::ptr::null_mut(),
             instructions: StateInstructions::default(),
             times_visited: 0,
-            children: HashMap::new(),
+            children: None,
             s1_choice: 0,
             s2_choice: 0,
             s1_options: None,
@@ -96,7 +96,10 @@ impl Node {
 
         let s1_mc_index = self.maximize_ucb_for_side(&self.s1_options.as_ref().unwrap());
         let s2_mc_index = self.maximize_ucb_for_side(&self.s2_options.as_ref().unwrap());
-        let child_vector = self.children.get_mut(&(s1_mc_index, s2_mc_index));
+        let child_vector = self
+            .children
+            .as_mut()
+            .and_then(|children| children.get_mut(&(s1_mc_index, s2_mc_index)));
         match child_vector {
             Some(child_vector) => {
                 let child_vec_ptr = child_vector as *mut Vec<Node>;
@@ -153,6 +156,7 @@ impl Node {
         let new_node_ptr = self.sample_node(&mut this_pair_vec);
         state.apply_instructions(&(*new_node_ptr).instructions.instruction_list);
         self.children
+            .get_or_insert_with(|| Box::new(HashMap::new()))
             .insert((s1_move_index, s2_move_index), this_pair_vec);
         new_node_ptr
     }

@@ -690,6 +690,12 @@ impl IndexMut<PokemonIndex> for SidePokemon {
     }
 }
 
+impl IndexMut<&PokemonIndex> for SidePokemon {
+    fn index_mut(&mut self, index: &PokemonIndex) -> &mut Self::Output {
+        &mut self.pkmn[*index as usize]
+    }
+}
+
 impl Default for Side {
     fn default() -> Side {
         Side {
@@ -1073,6 +1079,7 @@ pub struct Pokemon {
     pub weight_kg: f32,
     pub terastallized: bool,
     pub tera_type: PokemonType,
+    pub mega_evolved: bool,
     pub moves: PokemonMoves,
 }
 
@@ -1089,7 +1096,7 @@ impl Default for Pokemon {
             base_ability: Abilities::NONE,
             item: Items::NONE,
             nature: PokemonNature::SERIOUS,
-            evs: (85, 85, 85, 85, 85, 85),
+            evs: (11, 11, 11, 11, 11, 11),
             attack: 100,
             defense: 100,
             special_attack: 100,
@@ -1102,6 +1109,7 @@ impl Default for Pokemon {
             weight_kg: 1.0,
             terastallized: false,
             tera_type: PokemonType::NORMAL,
+            mega_evolved: false,
             moves: PokemonMoves {
                 m0: Default::default(),
                 m1: Default::default(),
@@ -1164,7 +1172,7 @@ impl Pokemon {
             self.evs.0, self.evs.1, self.evs.2, self.evs.3, self.evs.4, self.evs.5
         );
         format!(
-            "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+            "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
             self.id,
             self.level,
             self.types.0.to_string(),
@@ -1194,6 +1202,7 @@ impl Pokemon {
             self.terastallized,
             self.tera_type.to_string(),
             self.freeze_turns,
+            self.mega_evolved,
         )
     }
 
@@ -1210,7 +1219,7 @@ impl Pokemon {
                 ev_iter.next().unwrap().parse::<u8>().unwrap(),
             )
         } else {
-            (85, 85, 85, 85, 85, 85)
+            (11, 11, 11, 11, 11, 11)
         };
         Pokemon {
             id: PokemonName::from_str(split[0]).unwrap(),
@@ -1251,6 +1260,10 @@ impl Pokemon {
                 .get(28)
                 .and_then(|value| value.parse::<i8>().ok())
                 .unwrap_or(0),
+            mega_evolved: split
+                .get(29)
+                .and_then(|value| value.parse::<bool>().ok())
+                .unwrap_or(false),
         }
     }
 }
@@ -2102,6 +2115,11 @@ impl State {
                 active.ability =
                     Abilities::from(active.ability as i16 + instruction.ability_change);
             }
+            Instruction::ChangeBaseAbility(instruction) => {
+                let active = self.get_side(&instruction.side_ref).get_active();
+                active.base_ability =
+                    Abilities::from(active.base_ability as i16 + instruction.ability_change);
+            }
             Instruction::Heal(instruction) => {
                 self.heal(&instruction.side_ref, instruction.heal_amount)
             }
@@ -2205,8 +2223,14 @@ impl State {
                 SideReference::SideOne => self.side_one.get_active().terastallized ^= true,
                 SideReference::SideTwo => self.side_two.get_active().terastallized ^= true,
             },
-            Instruction::ToggleMegaUsed(instruction) => {
-                self.get_side(&instruction.side_ref).mega_used ^= true;
+            Instruction::ToggleMegaEvolved(instruction) => {
+                self.get_side(&instruction.side_ref).pokemon[&instruction.pokemon_index]
+                    .mega_evolved ^= true;
+                self.get_side(&instruction.side_ref).mega_used = self
+                    .get_side(&instruction.side_ref)
+                    .pokemon
+                    .into_iter()
+                    .any(|p| p.mega_evolved);
             }
             Instruction::SetLastUsedMove(instruction) => {
                 self.set_last_used_move(&instruction.side_ref, instruction.last_used_move)
@@ -2305,6 +2329,11 @@ impl State {
                 let active = self.get_side(&instruction.side_ref).get_active();
                 active.ability =
                     Abilities::from(active.ability as i16 - instruction.ability_change);
+            }
+            Instruction::ChangeBaseAbility(instruction) => {
+                let active = self.get_side(&instruction.side_ref).get_active();
+                active.base_ability =
+                    Abilities::from(active.base_ability as i16 - instruction.ability_change);
             }
             Instruction::EnableMove(instruction) => {
                 self.disable_move(&instruction.side_ref, &instruction.move_index)
@@ -2407,8 +2436,14 @@ impl State {
                 SideReference::SideOne => self.side_one.get_active().terastallized ^= true,
                 SideReference::SideTwo => self.side_two.get_active().terastallized ^= true,
             },
-            Instruction::ToggleMegaUsed(instruction) => {
-                self.get_side(&instruction.side_ref).mega_used ^= true;
+            Instruction::ToggleMegaEvolved(instruction) => {
+                self.get_side(&instruction.side_ref).pokemon[&instruction.pokemon_index]
+                    .mega_evolved ^= true;
+                self.get_side(&instruction.side_ref).mega_used = self
+                    .get_side(&instruction.side_ref)
+                    .pokemon
+                    .into_iter()
+                    .any(|p| p.mega_evolved);
             }
             Instruction::SetLastUsedMove(instruction) => {
                 self.set_last_used_move(&instruction.side_ref, instruction.previous_last_used_move)

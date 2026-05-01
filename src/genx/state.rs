@@ -17,11 +17,6 @@ use crate::state::{
 };
 use core::panic;
 
-fn common_pkmn_stat_calc(stat: u16, ev: u16, level: u16) -> u16 {
-    // 31 IV always used
-    ((2 * stat + 31 + (ev / 4)) * level) / 100
-}
-
 fn multiply_boost(boost_num: i8, stat_value: i16) -> i16 {
     match boost_num {
         -6 => stat_value * 2 / 8,
@@ -263,12 +258,7 @@ impl Pokemon {
     pub fn can_mega_evolve(&self) -> bool {
         // this assumes that if you have the correct mega stone, you can always mega evolve
         // even if another pkmn on the team already mega evolved
-        // it is incorrect but practically most teams aren't going to have multiple mega stones
-        if let Some(_mega_evolve_data) = self.id.mega_evolve_target(self.item) {
-            true
-        } else {
-            false
-        }
+        self.id.mega_evolve_target(self.item).is_some()
     }
 
     pub fn recalculate_stats(
@@ -326,25 +316,13 @@ impl Pokemon {
 
     pub fn calculate_stats_from_base_stats(&self) -> (i16, i16, i16, i16, i16, i16) {
         let base_stats = self.id.base_stats();
-        let attack =
-            (common_pkmn_stat_calc(base_stats.1 as u16, self.evs.1 as u16, self.level as u16) + 5)
-                as i16;
-        let defense =
-            (common_pkmn_stat_calc(base_stats.2 as u16, self.evs.2 as u16, self.level as u16) + 5)
-                as i16;
-        let special_attack =
-            (common_pkmn_stat_calc(base_stats.3 as u16, self.evs.3 as u16, self.level as u16) + 5)
-                as i16;
-        let special_defense =
-            (common_pkmn_stat_calc(base_stats.4 as u16, self.evs.4 as u16, self.level as u16) + 5)
-                as i16;
-        let speed =
-            (common_pkmn_stat_calc(base_stats.5 as u16, self.evs.5 as u16, self.level as u16) + 5)
-                as i16;
+        let attack = base_stats.1 + self.evs.1 as i16 + 20;
+        let defense = base_stats.2 + self.evs.2 as i16 + 20;
+        let special_attack = base_stats.3 + self.evs.3 as i16 + 20;
+        let special_defense = base_stats.4 + self.evs.4 as i16 + 20;
+        let speed = base_stats.5 + self.evs.5 as i16 + 20;
         (
-            (common_pkmn_stat_calc(base_stats.0 as u16, self.evs.0 as u16, self.level as u16)
-                + self.level as u16
-                + 10) as i16,
+            base_stats.0 + self.evs.0 as i16 + 75,
             Self::apply_nature(attack, self.nature, 1),
             Self::apply_nature(defense, self.nature, 2),
             Self::apply_nature(special_attack, self.nature, 3),
@@ -871,6 +849,10 @@ impl Side {
         true
     }
 
+    pub fn can_use_mega(&self) -> bool {
+        !self.mega_used && !self.pokemon.into_iter().any(|p| p.mega_evolved)
+    }
+
     pub fn add_switches(&self, vec: &mut Vec<MoveChoice>) {
         let mut iter = self.pokemon.into_iter();
         while let Some(p) = iter.next() {
@@ -1009,7 +991,7 @@ impl State {
                 encored,
                 taunted,
                 self.side_one.can_use_tera(),
-                !self.side_one.mega_used,
+                self.side_one.can_use_mega(),
             );
         }
 
@@ -1037,7 +1019,7 @@ impl State {
                 encored,
                 taunted,
                 self.side_two.can_use_tera(),
-                !self.side_two.mega_used,
+                self.side_two.can_use_mega(),
             );
         }
 
@@ -1126,7 +1108,7 @@ impl State {
                 encored,
                 taunted,
                 self.side_one.can_use_tera(),
-                !self.side_one.mega_used,
+                self.side_one.can_use_mega(),
             );
             if !self.side_one.trapped(side_two_active) {
                 self.side_one.add_switches(&mut side_one_options);
@@ -1156,7 +1138,7 @@ impl State {
                 encored,
                 taunted,
                 self.side_two.can_use_tera(),
-                !self.side_two.mega_used,
+                self.side_two.can_use_mega(),
             );
             if !self.side_two.trapped(side_one_active) {
                 self.side_two.add_switches(&mut side_two_options);

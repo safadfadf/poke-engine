@@ -598,6 +598,7 @@ pub struct PyPokemon {
     pub weight_kg: f32,
     pub terastallized: bool,
     pub tera_type: String,
+    pub mega_evolved: bool,
     pub moves: Vec<PyMove>,
 }
 
@@ -637,6 +638,7 @@ impl From<Pokemon> for PyPokemon {
             weight_kg: other.weight_kg,
             terastallized: other.terastallized,
             tera_type: other.tera_type.to_string(),
+            mega_evolved: other.mega_evolved,
             moves: other
                 .moves
                 .into_iter()
@@ -684,6 +686,7 @@ impl Into<Pokemon> for PyPokemon {
             weight_kg: self.weight_kg,
             terastallized: self.terastallized,
             tera_type: PokemonType::from_str(&self.tera_type).unwrap(),
+            mega_evolved: self.mega_evolved,
             moves: PokemonMoves {
                 m0: moves_vec[0].clone().into(),
                 m1: moves_vec[1].clone().into(),
@@ -708,7 +711,7 @@ impl PyPokemon {
         base_ability="".to_string(),
         item="none".to_string(),
         nature="serious".to_string(),
-        evs=(85, 85, 85, 85, 85, 85),
+        evs=(11, 11, 11, 11, 11, 11),
         attack=100,
         defense=100,
         special_attack=100,
@@ -722,6 +725,7 @@ impl PyPokemon {
         moves=Vec::<PyMove>::new(),
         terastallized=false,
         tera_type="typeless".to_string(),
+        mega_evolved=false,
     ))]
     fn new(
         id: String,
@@ -748,6 +752,7 @@ impl PyPokemon {
         moves: Vec<PyMove>,
         terastallized: bool,
         tera_type: String,
+        mega_evolved: bool,
     ) -> Self {
         if base_ability == "" {
             base_ability = ability.clone();
@@ -776,6 +781,7 @@ impl PyPokemon {
             weight_kg,
             terastallized,
             tera_type,
+            mega_evolved,
             moves,
         }
     }
@@ -966,9 +972,18 @@ impl PyTeamPreviewFilterSide {
 
     fn to_team_preview_options(&self, side: &Side) -> (Vec<PokemonIndex>, Option<Vec<PokemonIndex>>) {
         let mut valid_indices = Vec::new();
-        for name in &self.valid_pokemon {
-            if let Some(index) = Self::pokemon_name_to_index(side, name) {
-                valid_indices.push(index);
+        if self.valid_pokemon.is_empty() {
+            let mut iter = side.pokemon.into_iter();
+            while let Some(pokemon) = iter.next() {
+                if pokemon.hp > 0 && pokemon.id != PokemonName::NONE {
+                    valid_indices.push(iter.pokemon_index);
+                }
+            }
+        } else {
+            for name in &self.valid_pokemon {
+                if let Some(index) = Self::pokemon_name_to_index(side, name) {
+                    valid_indices.push(index);
+                }
             }
         }
         let lead_indices = self.leads.as_ref().map(|leads| {

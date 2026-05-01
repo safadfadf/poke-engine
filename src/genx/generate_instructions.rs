@@ -18,7 +18,7 @@ use crate::instruction::{
     ChangeVolatileStatusDurationInstruction, ChangeWeather, DecrementRestTurnsInstruction,
     DecrementWishInstruction, HealInstruction, RemoveVolatileStatusInstruction,
     SetSecondMoveSwitchOutMoveInstruction, SetSleepTurnsInstruction, ToggleBatonPassingInstruction,
-    ToggleDamageDealtHitSubstituteInstruction, ToggleMegaUsedInstruction,
+    ToggleDamageDealtHitSubstituteInstruction, ToggleMegaEvolvedInstruction,
     ToggleShedTailingInstruction, ToggleTrickRoomInstruction,
 };
 use crate::instruction::{ChangeAbilityInstruction, ToggleTerastallizedInstruction};
@@ -4065,6 +4065,7 @@ fn handle_both_moves(
 
 fn mega_evolve(state: &mut State, side_ref: SideReference, instructions: &mut StateInstructions) {
     let side = state.get_side(&side_ref);
+    let active_index = side.active_index;
     let active_pkmn = side.get_active();
 
     // assumes that you can mega-evolve if this function is called
@@ -4100,6 +4101,15 @@ fn mega_evolve(state: &mut State, side_ref: SideReference, instructions: &mut St
             }));
         active_pkmn.ability = mega_evolve_data.ability;
     }
+    if mega_evolve_data.ability != active_pkmn.base_ability {
+        instructions
+            .instruction_list
+            .push(Instruction::ChangeBaseAbility(ChangeAbilityInstruction {
+                side_ref,
+                ability_change: mega_evolve_data.ability as i16 - active_pkmn.base_ability as i16,
+            }));
+        active_pkmn.base_ability = mega_evolve_data.ability;
+    }
     // change type
     if mega_evolve_data.types != active_pkmn.types {
         instructions
@@ -4112,13 +4122,18 @@ fn mega_evolve(state: &mut State, side_ref: SideReference, instructions: &mut St
         active_pkmn.types = mega_evolve_data.types;
     }
 
-    // ability on switch in
-    ability_on_switch_in(state, &side_ref, instructions);
     instructions
         .instruction_list
-        .push(Instruction::ToggleMegaUsed(ToggleMegaUsedInstruction {
-            side_ref,
-        }));
+        .push(Instruction::ToggleMegaEvolved(
+            ToggleMegaEvolvedInstruction {
+                side_ref,
+                pokemon_index: active_index,
+            },
+        ));
+    state.get_side(&side_ref).get_active().mega_evolved = true;
+
+    // ability on switch in
+    ability_on_switch_in(state, &side_ref, instructions);
     state.get_side(&side_ref).mega_used = true;
 }
 

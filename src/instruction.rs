@@ -57,6 +57,7 @@ pub enum Instruction {
     DecrementTerrainTurnsRemaining,
     ChangeType(ChangeType),
     ChangeAbility(ChangeAbilityInstruction),
+    ChangeBaseAbility(ChangeAbilityInstruction),
     ChangeItem(ChangeItemInstruction),
     ChangeAttack(ChangeStatInstruction),
     ChangeDefense(ChangeStatInstruction),
@@ -90,7 +91,7 @@ pub enum Instruction {
     ToggleSideOneForceSwitch,
     ToggleSideTwoForceSwitch,
     ToggleTerastallized(ToggleTerastallizedInstruction),
-    ToggleMegaUsed(ToggleMegaUsedInstruction),
+    ToggleMegaEvolved(ToggleMegaEvolvedInstruction),
     TeamPreview(TeamPreviewInstruction),
 }
 
@@ -183,6 +184,13 @@ impl fmt::Debug for Instruction {
             }
             Instruction::ChangeAbility(c) => {
                 write!(f, "ChangeAbility {:?}: {:?}", c.side_ref, c.ability_change)
+            }
+            Instruction::ChangeBaseAbility(c) => {
+                write!(
+                    f,
+                    "ChangeBaseAbility {:?}: {:?}",
+                    c.side_ref, c.ability_change
+                )
             }
             Instruction::ChangeItem(c) => {
                 write!(
@@ -292,8 +300,12 @@ impl fmt::Debug for Instruction {
             Instruction::ToggleTerastallized(s) => {
                 write!(f, "ToggleTerastallized {:?}", s.side_ref)
             }
-            Instruction::ToggleMegaUsed(s) => {
-                write!(f, "ToggleMegaUsed {:?}", s.side_ref)
+            Instruction::ToggleMegaEvolved(s) => {
+                write!(
+                    f,
+                    "ToggleMegaEvolved {:?}: {:?}",
+                    s.side_ref, s.pokemon_index
+                )
             }
             Instruction::SetLastUsedMove(s) => {
                 write!(
@@ -581,8 +593,9 @@ pub struct ToggleTerastallizedInstruction {
 }
 
 #[derive(Debug, PartialEq, Clone)]
-pub struct ToggleMegaUsedInstruction {
+pub struct ToggleMegaEvolvedInstruction {
     pub side_ref: SideReference,
+    pub pokemon_index: PokemonIndex,
 }
 
 #[derive(Debug, PartialEq, Clone)]

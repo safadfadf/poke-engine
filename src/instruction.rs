@@ -90,6 +90,8 @@ pub enum Instruction {
     ToggleSideOneForceSwitch,
     ToggleSideTwoForceSwitch,
     ToggleTerastallized(ToggleTerastallizedInstruction),
+    ToggleMegaUsed(ToggleMegaUsedInstruction),
+    TeamPreview(TeamPreviewInstruction),
 }
 
 impl fmt::Debug for Instruction {
@@ -290,6 +292,9 @@ impl fmt::Debug for Instruction {
             Instruction::ToggleTerastallized(s) => {
                 write!(f, "ToggleTerastallized {:?}", s.side_ref)
             }
+            Instruction::ToggleMegaUsed(s) => {
+                write!(f, "ToggleMegaUsed {:?}", s.side_ref)
+            }
             Instruction::SetLastUsedMove(s) => {
                 write!(
                     f,
@@ -339,6 +344,13 @@ impl fmt::Debug for Instruction {
             }
             Instruction::ToggleSideTwoForceSwitch => {
                 write!(f, "ToggleSideTwoForceSwitch")
+            }
+            Instruction::TeamPreview(s) => {
+                write!(
+                    f,
+                    "TeamPreview {:?}: {:?},{:?},{:?}",
+                    s.side_ref, s.lead_index, s.reserve_index_one, s.reserve_index_two
+                )
             }
         }
     }
@@ -487,6 +499,16 @@ pub struct SwitchInstruction {
     pub next_index: PokemonIndex,
 }
 
+#[derive(Debug, PartialEq, Clone)]
+pub struct TeamPreviewInstruction {
+    pub side_ref: SideReference,
+    pub previous_active_index: PokemonIndex,
+    pub previous_pokemon: String,
+    pub lead_index: PokemonIndex,
+    pub reserve_index_one: PokemonIndex,
+    pub reserve_index_two: PokemonIndex,
+}
+
 // pokemon_index is present because even reserve pokemon can have their status
 // changed (i.e. healbell)
 #[derive(Debug, PartialEq, Clone)]
@@ -559,6 +581,11 @@ pub struct ToggleTerastallizedInstruction {
 }
 
 #[derive(Debug, PartialEq, Clone)]
+pub struct ToggleMegaUsedInstruction {
+    pub side_ref: SideReference,
+}
+
+#[derive(Debug, PartialEq, Clone)]
 pub struct ChangeType {
     pub side_ref: SideReference,
     pub new_types: (PokemonType, PokemonType),
@@ -581,7 +608,7 @@ mod test {
     // Make sure that the size of the Instruction enum doesn't change
     #[test]
     fn test_instruction_size() {
-        assert_eq!(size_of::<Instruction>(), 6);
-        assert_eq!(align_of::<Instruction>(), 2);
+        assert_eq!(size_of::<Instruction>(), 32);
+        assert_eq!(align_of::<Instruction>(), 8);
     }
 }

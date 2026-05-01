@@ -18,8 +18,8 @@ use crate::instruction::{
     ChangeVolatileStatusDurationInstruction, ChangeWeather, DecrementRestTurnsInstruction,
     DecrementWishInstruction, HealInstruction, RemoveVolatileStatusInstruction,
     SetSecondMoveSwitchOutMoveInstruction, SetSleepTurnsInstruction, ToggleBatonPassingInstruction,
-    ToggleDamageDealtHitSubstituteInstruction, ToggleShedTailingInstruction,
-    ToggleTrickRoomInstruction,
+    ToggleDamageDealtHitSubstituteInstruction, ToggleMegaUsedInstruction,
+    ToggleShedTailingInstruction, ToggleTrickRoomInstruction,
 };
 use crate::instruction::{ChangeAbilityInstruction, ToggleTerastallizedInstruction};
 use crate::instruction::{DecrementFutureSightInstruction, FormeChangeInstruction};
@@ -35,6 +35,7 @@ use super::state::{MoveChoice, PokemonVolatileStatus, Terrain, Weather};
 use crate::choices::{Choice, MoveCategory};
 use crate::instruction::{
     ChangeStatusInstruction, DamageInstruction, Instruction, StateInstructions, SwitchInstruction,
+    TeamPreviewInstruction,
 };
 use crate::state::{
     LastUsedMove, PokemonBoostableStat, PokemonIndex, PokemonMoveIndex, PokemonSideCondition,
@@ -4113,6 +4114,12 @@ fn mega_evolve(state: &mut State, side_ref: SideReference, instructions: &mut St
 
     // ability on switch in
     ability_on_switch_in(state, &side_ref, instructions);
+    instructions
+        .instruction_list
+        .push(Instruction::ToggleMegaUsed(ToggleMegaUsedInstruction {
+            side_ref,
+        }));
+    state.get_side(&side_ref).mega_used = true;
 }
 
 pub fn generate_instructions_from_move_pair(
@@ -4121,6 +4128,39 @@ pub fn generate_instructions_from_move_pair(
     side_two_move: &MoveChoice,
     branch_on_damage: bool,
 ) -> Vec<StateInstructions> {
+    if state.team_preview {
+        let mut instructions = StateInstructions::default();
+        if let MoveChoice::TeamPreview(lead_index, reserve_index_one, reserve_index_two) =
+            side_one_move
+        {
+            instructions
+                .instruction_list
+                .push(Instruction::TeamPreview(TeamPreviewInstruction {
+                    side_ref: SideReference::SideOne,
+                    previous_active_index: state.side_one.active_index,
+                    previous_pokemon: state.side_one.serialize(),
+                    lead_index: *lead_index,
+                    reserve_index_one: *reserve_index_one,
+                    reserve_index_two: *reserve_index_two,
+                }));
+        }
+        if let MoveChoice::TeamPreview(lead_index, reserve_index_one, reserve_index_two) =
+            side_two_move
+        {
+            instructions
+                .instruction_list
+                .push(Instruction::TeamPreview(TeamPreviewInstruction {
+                    side_ref: SideReference::SideTwo,
+                    previous_active_index: state.side_two.active_index,
+                    previous_pokemon: state.side_two.serialize(),
+                    lead_index: *lead_index,
+                    reserve_index_one: *reserve_index_one,
+                    reserve_index_two: *reserve_index_two,
+                }));
+        }
+        return vec![instructions];
+    }
+
     let mut side_one_choice;
     let mut s1_tera = false;
     let mut s1_mega = false;
@@ -4147,6 +4187,9 @@ pub fn generate_instructions_from_move_pair(
             side_one_choice = state.side_one.get_active().moves[move_index].choice.clone();
             side_one_choice.move_index = *move_index;
             s1_mega = true;
+        }
+        MoveChoice::TeamPreview(_, _, _) => {
+            unreachable!("team preview handled before move parsing")
         }
         MoveChoice::None => {
             side_one_choice = Choice::default();
@@ -4179,6 +4222,9 @@ pub fn generate_instructions_from_move_pair(
             side_two_choice = state.side_two.get_active().moves[move_index].choice.clone();
             side_two_choice.move_index = *move_index;
             s2_mega = true;
+        }
+        MoveChoice::TeamPreview(_, _, _) => {
+            unreachable!("team preview handled before move parsing")
         }
         MoveChoice::None => {
             side_two_choice = Choice::default();
@@ -4584,6 +4630,7 @@ fn choice_from_move_choice(
             choice.category = MoveCategory::Switch;
             Some(choice)
         }
+        MoveChoice::TeamPreview(_, _, _) => None,
         MoveChoice::None => None,
     }
 }

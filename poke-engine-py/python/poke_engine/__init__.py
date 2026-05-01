@@ -159,6 +159,27 @@ def monte_carlo_tree_search(state: State, duration_ms: int = 1000) -> MctsResult
     return MctsResult._from_rust(mcts(state, duration_ms))
 
 
+def monte_carlo_tree_search_team_preview(
+    state: State,
+    duration_ms: int = 1000,
+    team_preview_filters=None,
+) -> MctsResult:
+    """
+    Perform monte-carlo-tree-search from a team-preview state.
+
+    :param state: the team preview state to search through
+    :type state: State
+    :param duration_ms: time in milliseconds to run the search
+    :type duration_ms: int
+    :param team_preview_filters: optional TeamPreviewFilters instance
+    :return: the result of the search
+    :rtype: MctsResult
+    """
+    if team_preview_filters is None:
+        team_preview_filters = TeamPreviewFilters()
+    return MctsResult._from_rust(mcts_team_preview(state, duration_ms, team_preview_filters))
+
+
 def iterative_deepening_expectiminimax(
     state: State, duration_ms: int = 1000
 ) -> IterativeDeepeningResult:

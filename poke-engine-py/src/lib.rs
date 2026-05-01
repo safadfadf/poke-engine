@@ -18,8 +18,8 @@ use poke_engine::pokemon::PokemonName;
 use poke_engine::search::iterative_deepen_expectiminimax;
 use poke_engine::state::{
     LastUsedMove, Move, Pokemon, PokemonIndex, PokemonMoves, PokemonNature, PokemonStatus,
-    PokemonType, Side, SideConditions, SidePokemon, State, StateTerrain, StateTrickRoom,
-    StateWeather, VolatileStatusDurations,
+    PokemonType, PokemonVolatileStatusSet, Side, SideConditions, SidePokemon, State,
+    StateTerrain, StateTrickRoom, StateWeather, VolatileStatusDurations,
 };
 use std::str::FromStr;
 use std::time::Duration;
@@ -164,6 +164,7 @@ pub struct PySide {
     force_switch: bool,
     force_trapped: bool,
     slow_uturn_move: bool,
+    mega_used: bool,
     volatile_statuses: HashSet<String>,
     substitute_health: i16,
     attack_boost: i8,
@@ -194,6 +195,7 @@ impl From<Side> for PySide {
             force_switch: other.force_switch,
             force_trapped: other.force_trapped,
             slow_uturn_move: other.slow_uturn_move,
+            mega_used: other.mega_used,
             volatile_statuses: other
                 .volatile_statuses
                 .iter()
@@ -241,11 +243,12 @@ impl Into<Side> for PySide {
             force_switch: self.force_switch,
             force_trapped: self.force_trapped,
             slow_uturn_move: self.slow_uturn_move,
+            mega_used: self.mega_used,
             volatile_statuses: self
                 .volatile_statuses
                 .iter()
                 .map(|s| PokemonVolatileStatus::from_str(s))
-                .collect::<Result<HashSet<_>, _>>()
+                .collect::<Result<PokemonVolatileStatusSet, _>>()
                 .unwrap(),
             substitute_health: self.substitute_health,
             attack_boost: self.attack_boost,
@@ -280,6 +283,7 @@ impl PySide {
         force_switch=false,
         force_trapped=false,
         slow_uturn_move=false,
+        mega_used=false,
         volatile_statuses=HashSet::<String>::new(),
         substitute_health=0,
         attack_boost=0,
@@ -305,6 +309,7 @@ impl PySide {
         force_switch: bool,
         force_trapped: bool,
         slow_uturn_move: bool,
+        mega_used: bool,
         volatile_statuses: HashSet<String>,
         substitute_health: i16,
         attack_boost: i8,
@@ -339,6 +344,7 @@ impl PySide {
             force_switch,
             force_trapped,
             slow_uturn_move,
+            mega_used,
             volatile_statuses,
             substitute_health,
             attack_boost,
@@ -923,6 +929,107 @@ fn mcts(py_state: PyState, duration_ms: u64) -> PyResult<PyMctsResult> {
     Ok(py_mcts_result)
 }
 
+#[derive(Clone)]
+#[pyclass(name = "TeamPreviewFilterSide", module = "poke_engine", get_all, set_all)]
+struct PyTeamPreviewFilterSide {
+    valid_pokemon: Vec<String>,
+    leads: Option<Vec<String>>,
+}
+
+#[pymethods]
+impl PyTeamPreviewFilterSide {
+    #[new]
+    #[pyo3(signature = (
+        valid_pokemon=Vec::<String>::new(),
+        leads=None,
+    ))]
+    fn new(valid_pokemon: Vec<String>, leads: Option<Vec<String>>) -> Self {
+        PyTeamPreviewFilterSide {
+            valid_pokemon,
+            leads,
+        }
+    }
+}
+
+impl PyTeamPreviewFilterSide {
+    fn pokemon_name_to_index(side: &Side, name: &str) -> Option<PokemonIndex> {
+        if let Ok(pokemon_name) = PokemonName::from_str(name) {
+            let mut iter = side.pokemon.into_iter();
+            while let Some(pokemon) = iter.next() {
+                if pokemon.id == pokemon_name {
+                    return Some(iter.pokemon_index);
+                }
+            }
+        }
+        None
+    }
+
+    fn to_team_preview_options(&self, side: &Side) -> (Vec<PokemonIndex>, Option<Vec<PokemonIndex>>) {
+        let mut valid_indices = Vec::new();
+        for name in &self.valid_pokemon {
+            if let Some(index) = Self::pokemon_name_to_index(side, name) {
+                valid_indices.push(index);
+            }
+        }
+        let lead_indices = self.leads.as_ref().map(|leads| {
+            leads
+                .iter()
+                .filter_map(|name| Self::pokemon_name_to_index(side, name))
+                .collect::<Vec<PokemonIndex>>()
+        });
+        (valid_indices, lead_indices)
+    }
+}
+
+#[derive(Clone)]
+#[pyclass(name = "TeamPreviewFilters", module = "poke_engine", get_all, set_all)]
+struct PyTeamPreviewFilters {
+    side_one: PyTeamPreviewFilterSide,
+    side_two: PyTeamPreviewFilterSide,
+}
+
+#[pymethods]
+impl PyTeamPreviewFilters {
+    #[new]
+    #[pyo3(signature = (
+        side_one=PyTeamPreviewFilterSide::new(Vec::new(), None),
+        side_two=PyTeamPreviewFilterSide::new(Vec::new(), None),
+    ))]
+    fn new(side_one: PyTeamPreviewFilterSide, side_two: PyTeamPreviewFilterSide) -> Self {
+        PyTeamPreviewFilters { side_one, side_two }
+    }
+}
+
+#[pyfunction]
+fn mcts_team_preview(
+    py_state: PyState,
+    duration_ms: u64,
+    team_preview_filter: PyTeamPreviewFilters,
+) -> PyResult<PyMctsResult> {
+    let mut state: State = py_state.into();
+    if !state.team_preview {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "State is not in team preview phase",
+        ));
+    }
+
+    let s1_team_preview_options = team_preview_filter
+        .side_one
+        .to_team_preview_options(&state.side_one);
+    let s1_options =
+        State::generate_team_preview_options(&s1_team_preview_options.0, s1_team_preview_options.1);
+    let s2_team_preview_options = team_preview_filter
+        .side_two
+        .to_team_preview_options(&state.side_two);
+    let s2_options =
+        State::generate_team_preview_options(&s2_team_preview_options.0, s2_team_preview_options.1);
+
+    let duration = Duration::from_millis(duration_ms);
+    let mcts_result = perform_mcts(&mut state, s1_options, s2_options, duration);
+    let py_mcts_result = PyMctsResult::from_mcts_result(mcts_result, &state);
+    Ok(py_mcts_result)
+}
+
 #[pyfunction]
 fn id(py_state: PyState, duration_ms: u64) -> PyResult<PyIterativeDeepeningResult> {
     let mut state: State = py_state.into();
@@ -1300,6 +1407,7 @@ fn py_poke_engine(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(generate_instructions, m)?)?;
     m.add_function(wrap_pyfunction!(id, m)?)?;
     m.add_function(wrap_pyfunction!(mcts, m)?)?;
+    m.add_function(wrap_pyfunction!(mcts_team_preview, m)?)?;
     m.add_class::<PyState>()?;
     m.add_class::<PySide>()?;
     m.add_class::<PySideConditions>()?;
@@ -1308,5 +1416,7 @@ fn py_poke_engine(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyMove>()?;
     m.add_class::<PyStateInstructions>()?;
     m.add_class::<PyInstruction>()?;
+    m.add_class::<PyTeamPreviewFilters>()?;
+    m.add_class::<PyTeamPreviewFilterSide>()?;
     Ok(())
 }

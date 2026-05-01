@@ -675,12 +675,13 @@ pub fn calculate_futuresight_damage(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
     use std::iter::FromIterator;
 
     use super::super::state::{PokemonVolatileStatus, Weather};
     use super::*;
-    use crate::state::{PokemonStatus, PokemonType, SideReference, State};
+    use crate::state::{
+        PokemonStatus, PokemonType, PokemonVolatileStatusSet, SideReference, State,
+    };
 
     #[test]
     fn test_basic_damaging_move() {
@@ -990,8 +991,8 @@ mod tests {
                     let mut choice = Choice {
                         ..Default::default()
                     };
-                    state.side_one.volatile_statuses = HashSet::from_iter(attacking_volatile_status);
-                    state.side_two.volatile_statuses = HashSet::from_iter(defending_volatile_status);
+                    state.side_one.volatile_statuses = PokemonVolatileStatusSet::from_iter(attacking_volatile_status);
+                    state.side_two.volatile_statuses = PokemonVolatileStatusSet::from_iter(defending_volatile_status);
 
                     choice.move_id = move_name;
                     choice.category = MoveCategory::Physical;

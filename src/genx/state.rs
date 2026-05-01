@@ -11,11 +11,11 @@ use crate::instruction::{
 };
 use crate::pokemon::PokemonName;
 use crate::state::{
-    LastUsedMove, Pokemon, PokemonBoostableStat, PokemonIndex, PokemonMoveIndex,
-    PokemonSideCondition, PokemonStatus, PokemonType, Side, SideReference, State,
+    LastUsedMove, Pokemon, PokemonBoostableStat, PokemonIndex, PokemonMoveIndex, PokemonNature,
+    PokemonSideCondition, PokemonStatus, PokemonType, PokemonVolatileStatusSet, Side,
+    SideReference, State,
 };
 use core::panic;
-use std::collections::HashSet;
 
 fn common_pkmn_stat_calc(stat: u16, ev: u16, level: u16) -> u16 {
     // 31 IV always used
@@ -47,6 +47,7 @@ pub enum MoveChoice {
     MoveMega(PokemonMoveIndex),
     Move(PokemonMoveIndex),
     Switch(PokemonIndex),
+    TeamPreview(PokemonIndex, PokemonIndex, PokemonIndex),
     None,
 }
 
@@ -63,6 +64,13 @@ impl MoveChoice {
                 format!("{}", side.get_active_immutable().moves[&index].id).to_lowercase()
             }
             MoveChoice::Switch(index) => format!("{}", side.pokemon[*index].id).to_lowercase(),
+            MoveChoice::TeamPreview(lead, reserve_one, reserve_two) => format!(
+                "{},{},{}",
+                side.pokemon[*lead].id,
+                side.pokemon[*reserve_one].id,
+                side.pokemon[*reserve_two].id
+            )
+            .to_lowercase(),
             MoveChoice::None => "No Move".to_string(),
         }
     }
@@ -311,22 +319,37 @@ impl Pokemon {
             instructions.instruction_list.push(ins);
         }
     }
+    fn apply_nature(stat: i16, nature: PokemonNature, stat_index: usize) -> i16 {
+        let (numerator, denominator) = nature.modifier(stat_index);
+        (stat * numerator / denominator) as i16
+    }
+
     pub fn calculate_stats_from_base_stats(&self) -> (i16, i16, i16, i16, i16, i16) {
         let base_stats = self.id.base_stats();
+        let attack =
+            (common_pkmn_stat_calc(base_stats.1 as u16, self.evs.1 as u16, self.level as u16) + 5)
+                as i16;
+        let defense =
+            (common_pkmn_stat_calc(base_stats.2 as u16, self.evs.2 as u16, self.level as u16) + 5)
+                as i16;
+        let special_attack =
+            (common_pkmn_stat_calc(base_stats.3 as u16, self.evs.3 as u16, self.level as u16) + 5)
+                as i16;
+        let special_defense =
+            (common_pkmn_stat_calc(base_stats.4 as u16, self.evs.4 as u16, self.level as u16) + 5)
+                as i16;
+        let speed =
+            (common_pkmn_stat_calc(base_stats.5 as u16, self.evs.5 as u16, self.level as u16) + 5)
+                as i16;
         (
             (common_pkmn_stat_calc(base_stats.0 as u16, self.evs.0 as u16, self.level as u16)
                 + self.level as u16
                 + 10) as i16,
-            (common_pkmn_stat_calc(base_stats.1 as u16, self.evs.1 as u16, self.level as u16) + 5)
-                as i16,
-            (common_pkmn_stat_calc(base_stats.2 as u16, self.evs.2 as u16, self.level as u16) + 5)
-                as i16,
-            (common_pkmn_stat_calc(base_stats.3 as u16, self.evs.3 as u16, self.level as u16) + 5)
-                as i16,
-            (common_pkmn_stat_calc(base_stats.4 as u16, self.evs.4 as u16, self.level as u16) + 5)
-                as i16,
-            (common_pkmn_stat_calc(base_stats.5 as u16, self.evs.5 as u16, self.level as u16) + 5)
-                as i16,
+            Self::apply_nature(attack, self.nature, 1),
+            Self::apply_nature(defense, self.nature, 2),
+            Self::apply_nature(special_attack, self.nature, 3),
+            Self::apply_nature(special_defense, self.nature, 4),
+            Self::apply_nature(speed, self.nature, 5),
         )
     }
     pub fn add_available_moves(
@@ -336,6 +359,7 @@ impl Pokemon {
         encored: bool,
         taunted: bool,
         can_tera: bool,
+        can_mega: bool,
     ) {
         let mut iter = self.moves.into_iter();
         while let Some(p) = iter.next() {
@@ -366,7 +390,7 @@ impl Pokemon {
                 if can_tera {
                     vec.push(MoveChoice::MoveTera(iter.pokemon_move_index));
                 }
-                if self.can_mega_evolve() {
+                if can_mega && self.can_mega_evolve() {
                     vec.push(MoveChoice::MoveMega(iter.pokemon_move_index));
                 }
             }
@@ -551,7 +575,7 @@ impl Pokemon {
     pub fn volatile_status_can_be_applied(
         &self,
         volatile_status: &PokemonVolatileStatus,
-        active_volatiles: &HashSet<PokemonVolatileStatus>,
+        active_volatiles: &PokemonVolatileStatusSet,
         first_move: bool,
     ) -> bool {
         if active_volatiles.contains(volatile_status) || self.hp == 0 {
@@ -593,7 +617,7 @@ impl Pokemon {
     pub fn immune_to_stats_lowered_by_opponent(
         &self,
         stat: &PokemonBoostableStat,
-        volatiles: &HashSet<PokemonVolatileStatus>,
+        volatiles: &PokemonVolatileStatusSet,
     ) -> bool {
         if [
             Abilities::CLEARBODY,
@@ -708,7 +732,7 @@ impl Side {
     }
     pub fn active_is_charging_move(&self) -> Option<PokemonMoveIndex> {
         for volatile in self.volatile_statuses.iter() {
-            if let Some(choice) = charge_volatile_to_choice(volatile) {
+            if let Some(choice) = charge_volatile_to_choice(&volatile) {
                 let mut iter = self.get_active_immutable().moves.into_iter();
                 while let Some(mv) = iter.next() {
                     if mv.id == choice {
@@ -901,23 +925,61 @@ impl Side {
 }
 
 impl State {
+    pub fn generate_team_preview_options(
+        valid_pokemon: &Vec<PokemonIndex>,
+        leads: Option<Vec<PokemonIndex>>,
+    ) -> Vec<MoveChoice> {
+        let valid = if valid_pokemon.is_empty() {
+            vec![
+                PokemonIndex::P0,
+                PokemonIndex::P1,
+                PokemonIndex::P2,
+                PokemonIndex::P3,
+                PokemonIndex::P4,
+                PokemonIndex::P5,
+            ]
+        } else {
+            valid_pokemon.clone()
+        };
+        let allowed_leads = leads.unwrap_or_else(|| valid.clone());
+        let mut options = Vec::new();
+        for lead in allowed_leads {
+            if !valid.contains(&lead) {
+                continue;
+            }
+            for reserve_one in valid.iter() {
+                if *reserve_one == lead {
+                    continue;
+                }
+                for reserve_two in valid.iter() {
+                    if *reserve_two == lead || *reserve_two == *reserve_one {
+                        continue;
+                    }
+                    options.push(MoveChoice::TeamPreview(lead, *reserve_one, *reserve_two));
+                }
+            }
+        }
+        options
+    }
+
     pub fn root_get_all_options(&self) -> (Vec<MoveChoice>, Vec<MoveChoice>) {
         if self.team_preview {
-            let mut s1_options = Vec::with_capacity(6);
-            let mut s2_options = Vec::with_capacity(6);
-
+            let mut s1_valid = Vec::new();
             let mut pkmn_iter = self.side_one.pokemon.into_iter();
-            while let Some(_) = pkmn_iter.next() {
-                if self.side_one.pokemon[pkmn_iter.pokemon_index].hp > 0 {
-                    s1_options.push(MoveChoice::Switch(pkmn_iter.pokemon_index));
+            while let Some(pkmn) = pkmn_iter.next() {
+                if pkmn.hp > 0 && pkmn.id != PokemonName::NONE {
+                    s1_valid.push(pkmn_iter.pokemon_index);
                 }
             }
+            let mut s2_valid = Vec::new();
             let mut pkmn_iter = self.side_two.pokemon.into_iter();
-            while let Some(_) = pkmn_iter.next() {
-                if self.side_two.pokemon[pkmn_iter.pokemon_index].hp > 0 {
-                    s2_options.push(MoveChoice::Switch(pkmn_iter.pokemon_index));
+            while let Some(pkmn) = pkmn_iter.next() {
+                if pkmn.hp > 0 && pkmn.id != PokemonName::NONE {
+                    s2_valid.push(pkmn_iter.pokemon_index);
                 }
             }
+            let s1_options = State::generate_team_preview_options(&s1_valid, None);
+            let s2_options = State::generate_team_preview_options(&s2_valid, None);
             return (s1_options, s2_options);
         }
 
@@ -927,6 +989,7 @@ impl State {
             s1_options.retain(|x| match x {
                 MoveChoice::Move(_) | MoveChoice::MoveTera(_) | MoveChoice::MoveMega(_) => true,
                 MoveChoice::Switch(_) => false,
+                MoveChoice::TeamPreview(_, _, _) => false,
                 MoveChoice::None => true,
             });
         }
@@ -946,6 +1009,7 @@ impl State {
                 encored,
                 taunted,
                 self.side_one.can_use_tera(),
+                !self.side_one.mega_used,
             );
         }
 
@@ -953,6 +1017,7 @@ impl State {
             s2_options.retain(|x| match x {
                 MoveChoice::Move(_) | MoveChoice::MoveTera(_) | MoveChoice::MoveMega(_) => true,
                 MoveChoice::Switch(_) => false,
+                MoveChoice::TeamPreview(_, _, _) => false,
                 MoveChoice::None => true,
             });
         }
@@ -972,6 +1037,7 @@ impl State {
                 encored,
                 taunted,
                 self.side_two.can_use_tera(),
+                !self.side_two.mega_used,
             );
         }
 
@@ -1060,6 +1126,7 @@ impl State {
                 encored,
                 taunted,
                 self.side_one.can_use_tera(),
+                !self.side_one.mega_used,
             );
             if !self.side_one.trapped(side_two_active) {
                 self.side_one.add_switches(&mut side_one_options);
@@ -1089,6 +1156,7 @@ impl State {
                 encored,
                 taunted,
                 self.side_two.can_use_tera(),
+                !self.side_two.mega_used,
             );
             if !self.side_two.trapped(side_one_active) {
                 self.side_two.add_switches(&mut side_two_options);
@@ -1134,9 +1202,10 @@ impl State {
 
         // Take ownership of the current set to avoid borrow conflicts
         // since we may need to modify the side in the loop
-        let mut volatile_statuses = std::mem::take(&mut side.volatile_statuses);
+        let volatile_statuses = std::mem::take(&mut side.volatile_statuses);
 
-        volatile_statuses.retain(|pkmn_volatile_status| {
+        let mut retained_volatile_statuses = PokemonVolatileStatusSet::new();
+        for pkmn_volatile_status in volatile_statuses.iter() {
             let should_retain = match pkmn_volatile_status {
                 PokemonVolatileStatus::SUBSTITUTE => baton_passing || shed_tailing,
                 PokemonVolatileStatus::LEECHSEED => baton_passing,
@@ -1157,7 +1226,7 @@ impl State {
                     instructions.push(Instruction::ChangeVolatileStatusDuration(
                         ChangeVolatileStatusDurationInstruction {
                             side_ref: *side_ref,
-                            volatile_status: *pkmn_volatile_status,
+                            volatile_status: pkmn_volatile_status,
                             amount: -1 * side.volatile_status_durations.lockedmove,
                         },
                     ));
@@ -1168,7 +1237,7 @@ impl State {
                     instructions.push(Instruction::ChangeVolatileStatusDuration(
                         ChangeVolatileStatusDurationInstruction {
                             side_ref: *side_ref,
-                            volatile_status: *pkmn_volatile_status,
+                            volatile_status: pkmn_volatile_status,
                             amount: -1 * side.volatile_status_durations.yawn,
                         },
                     ));
@@ -1179,7 +1248,7 @@ impl State {
                     instructions.push(Instruction::ChangeVolatileStatusDuration(
                         ChangeVolatileStatusDurationInstruction {
                             side_ref: *side_ref,
-                            volatile_status: *pkmn_volatile_status,
+                            volatile_status: pkmn_volatile_status,
                             amount: -1 * side.volatile_status_durations.taunt,
                         },
                     ));
@@ -1193,15 +1262,16 @@ impl State {
                 instructions.push(Instruction::RemoveVolatileStatus(
                     RemoveVolatileStatusInstruction {
                         side_ref: *side_ref,
-                        volatile_status: *pkmn_volatile_status,
+                        volatile_status: pkmn_volatile_status,
                     },
                 ));
+            } else {
+                retained_volatile_statuses.insert(pkmn_volatile_status);
             }
-            should_retain
-        });
+        }
 
         // Clean up by re-setting the volatile statuses
-        side.volatile_statuses = volatile_statuses;
+        side.volatile_statuses = retained_volatile_statuses;
     }
 
     pub fn terrain_is_active(&self, terrain: &Terrain) -> bool {

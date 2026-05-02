@@ -18,8 +18,8 @@ use poke_engine::pokemon::PokemonName;
 use poke_engine::search::iterative_deepen_expectiminimax;
 use poke_engine::state::{
     LastUsedMove, Move, Pokemon, PokemonIndex, PokemonMoves, PokemonNature, PokemonStatus,
-    PokemonType, PokemonVolatileStatusSet, Side, SideConditions, SidePokemon, State,
-    StateTerrain, StateTrickRoom, StateWeather, VolatileStatusDurations,
+    PokemonType, PokemonVolatileStatusSet, Side, SideConditions, SidePokemon, State, StateTerrain,
+    StateTrickRoom, StateWeather, VolatileStatusDurations,
 };
 use std::str::FromStr;
 use std::time::Duration;
@@ -925,18 +925,23 @@ impl PyIterativeDeepeningResult {
 }
 
 #[pyfunction]
-fn mcts(py_state: PyState, duration_ms: u64) -> PyResult<PyMctsResult> {
+fn mcts(py: Python<'_>, py_state: PyState, duration_ms: u64) -> PyResult<PyMctsResult> {
     let mut state: State = py_state.into();
     let duration = Duration::from_millis(duration_ms);
     let (s1_options, s2_options) = state.root_get_all_options();
-    let mcts_result = perform_mcts(&mut state, s1_options, s2_options, duration);
+    let mcts_result = py.detach(|| perform_mcts(&mut state, s1_options, s2_options, duration));
 
     let py_mcts_result = PyMctsResult::from_mcts_result(mcts_result, &state);
     Ok(py_mcts_result)
 }
 
 #[derive(Clone)]
-#[pyclass(name = "TeamPreviewFilterSide", module = "poke_engine", get_all, set_all)]
+#[pyclass(
+    name = "TeamPreviewFilterSide",
+    module = "poke_engine",
+    get_all,
+    set_all
+)]
 struct PyTeamPreviewFilterSide {
     valid_pokemon: Vec<String>,
     leads: Option<Vec<String>>,
@@ -970,7 +975,10 @@ impl PyTeamPreviewFilterSide {
         None
     }
 
-    fn to_team_preview_options(&self, side: &Side) -> (Vec<PokemonIndex>, Option<Vec<PokemonIndex>>) {
+    fn to_team_preview_options(
+        &self,
+        side: &Side,
+    ) -> (Vec<PokemonIndex>, Option<Vec<PokemonIndex>>) {
         let mut valid_indices = Vec::new();
         if self.valid_pokemon.is_empty() {
             let mut iter = side.pokemon.into_iter();
@@ -1017,6 +1025,7 @@ impl PyTeamPreviewFilters {
 
 #[pyfunction]
 fn mcts_team_preview(
+    py: Python<'_>,
     py_state: PyState,
     duration_ms: u64,
     team_preview_filter: PyTeamPreviewFilters,
@@ -1040,7 +1049,7 @@ fn mcts_team_preview(
         State::generate_team_preview_options(&s2_team_preview_options.0, s2_team_preview_options.1);
 
     let duration = Duration::from_millis(duration_ms);
-    let mcts_result = perform_mcts(&mut state, s1_options, s2_options, duration);
+    let mcts_result = py.detach(|| perform_mcts(&mut state, s1_options, s2_options, duration));
     let py_mcts_result = PyMctsResult::from_mcts_result(mcts_result, &state);
     Ok(py_mcts_result)
 }

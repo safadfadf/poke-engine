@@ -23,6 +23,7 @@ debug = 0
 
 [dependencies]
 clap = { version = "4.5.4", features = ["derive"] }
+mimalloc = { version = "0.1", default-features = false }
 rand = "0.9.1"
 
 [features]

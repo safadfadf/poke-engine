@@ -1575,6 +1575,7 @@ impl Default for State {
     }
 }
 impl State {
+    #[inline]
     pub fn battle_is_over(&self) -> f32 {
         //  0 if battle is not over
         //  1 if side one has won
@@ -1588,6 +1589,7 @@ impl State {
         0.0
     }
 
+    #[inline]
     pub fn get_side(&mut self, side_ref: &SideReference) -> &mut Side {
         match side_ref {
             SideReference::SideOne => &mut self.side_one,
@@ -1595,6 +1597,7 @@ impl State {
         }
     }
 
+    #[inline]
     pub fn get_side_immutable(&self, side_ref: &SideReference) -> &Side {
         match side_ref {
             SideReference::SideOne => &self.side_one,
@@ -1602,6 +1605,7 @@ impl State {
         }
     }
 
+    #[inline]
     pub fn get_both_sides(&mut self, side_ref: &SideReference) -> (&mut Side, &mut Side) {
         match side_ref {
             SideReference::SideOne => (&mut self.side_one, &mut self.side_two),
@@ -1609,6 +1613,7 @@ impl State {
         }
     }
 
+    #[inline]
     pub fn get_both_sides_immutable(&self, side_ref: &SideReference) -> (&Side, &Side) {
         match side_ref {
             SideReference::SideOne => (&self.side_one, &self.side_two),
@@ -2046,12 +2051,14 @@ impl State {
         }
     }
 
-    pub fn apply_instructions(&mut self, instructions: &Vec<Instruction>) {
+    #[inline]
+    pub fn apply_instructions(&mut self, instructions: &[Instruction]) {
         for i in instructions {
             self.apply_one_instruction(i)
         }
     }
 
+    #[inline]
     pub fn apply_one_instruction(&mut self, instruction: &Instruction) {
         match instruction {
             Instruction::Damage(instruction) => {
@@ -2260,12 +2267,14 @@ impl State {
         }
     }
 
-    pub fn reverse_instructions(&mut self, instructions: &Vec<Instruction>) {
+    #[inline]
+    pub fn reverse_instructions(&mut self, instructions: &[Instruction]) {
         for i in instructions.iter().rev() {
             self.reverse_one_instruction(i);
         }
     }
 
+    #[inline]
     pub fn reverse_one_instruction(&mut self, instruction: &Instruction) {
         match instruction {
             Instruction::Damage(instruction) => {

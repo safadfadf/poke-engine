@@ -4064,6 +4064,13 @@ fn handle_both_moves(
 }
 
 fn mega_evolve(state: &mut State, side_ref: SideReference, instructions: &mut StateInstructions) {
+    {
+        let side = state.get_side_immutable(&side_ref);
+        if side.mega_used || side.pokemon.into_iter().any(|p| p.mega_evolved) {
+            return;
+        }
+    }
+
     let side = state.get_side(&side_ref);
     let active_index = side.active_index;
     let active_pkmn = side.get_active();

@@ -1083,6 +1083,43 @@ pub struct Pokemon {
     pub moves: PokemonMoves,
 }
 
+pub fn validate_champions_evs(
+    evs: (u8, u8, u8, u8, u8, u8),
+) -> Result<(u8, u8, u8, u8, u8, u8), String> {
+    let values = [evs.0, evs.1, evs.2, evs.3, evs.4, evs.5];
+    if let Some(value) = values.iter().find(|&&value| value > 32) {
+        return Err(format!(
+            "invalid Champions stat points {:?}: each value must be <= 32, got {}",
+            evs, value
+        ));
+    }
+    let total: u16 = values.iter().map(|&value| value as u16).sum();
+    if total > 66 {
+        return Err(format!(
+            "invalid Champions stat points {:?}: total must be <= 66, got {}",
+            evs, total
+        ));
+    }
+    Ok(evs)
+}
+
+fn deserialize_champions_evs(serialized: &str) -> (u8, u8, u8, u8, u8, u8) {
+    let values: Vec<u8> = serialized
+        .split(";")
+        .map(|value| value.parse::<u8>().unwrap())
+        .collect();
+    if values.len() != 6 {
+        panic!(
+            "invalid Champions stat points '{}': expected 6 values",
+            serialized
+        );
+    }
+    validate_champions_evs((
+        values[0], values[1], values[2], values[3], values[4], values[5],
+    ))
+    .unwrap_or_else(|err| panic!("{}", err))
+}
+
 impl Default for Pokemon {
     fn default() -> Pokemon {
         Pokemon {
@@ -1209,15 +1246,7 @@ impl Pokemon {
     pub fn deserialize(serialized: &str) -> Pokemon {
         let split: Vec<&str> = serialized.split(",").collect();
         let evs = if split[12] != "" {
-            let mut ev_iter = split[12].split(";");
-            (
-                ev_iter.next().unwrap().parse::<u8>().unwrap(),
-                ev_iter.next().unwrap().parse::<u8>().unwrap(),
-                ev_iter.next().unwrap().parse::<u8>().unwrap(),
-                ev_iter.next().unwrap().parse::<u8>().unwrap(),
-                ev_iter.next().unwrap().parse::<u8>().unwrap(),
-                ev_iter.next().unwrap().parse::<u8>().unwrap(),
-            )
+            deserialize_champions_evs(split[12])
         } else {
             (11, 11, 11, 11, 11, 11)
         };
@@ -2587,9 +2616,9 @@ impl State {
     /// // nature
     /// "SERIOUS,",
     ///
-    /// // EVs split by `;`. Leave blank for default EVs (85 in all)
-    /// "252;0;252;0;4;0,",
-    /// // ",", left blank for default EVs
+    /// // Champions stat points split by `;`. Leave blank for default points (11 in all)
+    /// "32;0;32;0;1;0,",
+    /// // ",", left blank for default stat points
     ///
     /// // attack,defense,special attack,special defense,speed
     /// // note these are final stats, not base stats
@@ -2700,7 +2729,7 @@ impl State {
     ///
     ///
     /// // the same state, but all in one line
-    /// let serialized_state = "alakazam,100,Psychic,Typeless,Psychic,Typeless,251,251,NONE,NONE,LIFEORB,SERIOUS,252;0;252;0;4;0,121,148,353,206,365,None,0,0,25.5,PSYCHIC;false;16,GRASSKNOT;false;32,SHADOWBALL;false;24,HIDDENPOWERFIRE70;false;24,false,Normal=skarmory,100,Steel,Flying,Steel,Flying,271,271,STURDY,STURDY,CUSTAPBERRY,SERIOUS,,259,316,104,177,262,None,0,0,25.5,STEALTHROCK;false;32,SPIKES;false;32,BRAVEBIRD;false;24,THIEF;false;40,false,Normal=tyranitar,100,Rock,Dark,Rock,Dark,404,404,SANDSTREAM,SANDSTREAM,CHOPLEBERRY,SERIOUS,,305,256,203,327,159,None,0,0,25.5,CRUNCH;false;24,SUPERPOWER;false;8,THUNDERWAVE;false;32,PURSUIT;false;32,false,Normal=mamoswine,100,Ice,Ground,Ice,Ground,362,362,THICKFAT,THICKFAT,NEVERMELTICE,SERIOUS,,392,196,158,176,241,None,0,0,25.5,ICESHARD;false;48,EARTHQUAKE;false;16,SUPERPOWER;false;8,ICICLECRASH;false;16,false,Normal=jellicent,100,Water,Ghost,Water,Ghost,404,404,WATERABSORB,WATERABSORB,AIRBALLOON,SERIOUS,,140,237,206,246,180,None,0,0,25.5,TAUNT;false;32,NIGHTSHADE;false;24,WILLOWISP;false;24,RECOVER;false;16,false,Normal=excadrill,100,Ground,Steel,Ground,Steel,362,362,SANDFORCE,SANDFORCE,CHOICESCARF,SERIOUS,,367,156,122,168,302,None,0,0,25.5,EARTHQUAKE;false;16,IRONHEAD;false;24,ROCKSLIDE;false;16,RAPIDSPIN;false;64,false,Normal=0=0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;==0;0;0;0;0;0=0=0=0=0=0=0=0=0=0=0=0=0=false=NONE=false=false=false=switch:0=false/terrakion,100,Rock,Fighting,Rock,Fighting,323,323,NONE,NONE,FOCUSSASH,SERIOUS,,357,216,163,217,346,None,0,0,25.5,CLOSECOMBAT;false;8,STONEEDGE;false;8,STEALTHROCK;false;32,TAUNT;false;32,false,Normal=lucario,100,Fighting,Steel,Fighting,Steel,281,281,NONE,NONE,LIFEORB,SERIOUS,,350,176,241,177,279,None,0,0,25.5,CLOSECOMBAT;false;8,EXTREMESPEED;false;8,SWORDSDANCE;false;32,CRUNCH;false;24,false,Normal=breloom,100,Grass,Fighting,Grass,Fighting,262,262,TECHNICIAN,TECHNICIAN,LIFEORB,SERIOUS,,394,196,141,156,239,None,0,0,25.5,MACHPUNCH;false;48,BULLETSEED;false;48,SWORDSDANCE;false;32,LOWSWEEP;false;32,false,Normal=keldeo,100,Water,Fighting,Water,Fighting,323,323,NONE,NONE,LEFTOVERS,SERIOUS,,163,216,357,217,346,None,0,0,25.5,SECRETSWORD;false;16,HYDROPUMP;false;8,SCALD;false;24,SURF;false;24,false,Normal=conkeldurr,100,Fighting,Typeless,Fighting,Typeless,414,414,GUTS,GUTS,LEFTOVERS,SERIOUS,,416,226,132,167,126,None,0,0,25.5,MACHPUNCH;false;48,DRAINPUNCH;false;16,ICEPUNCH;false;24,THUNDERPUNCH;false;24,false,Normal=toxicroak,100,Poison,Fighting,Poison,Fighting,307,307,DRYSKIN,DRYSKIN,LIFEORB,SERIOUS,,311,166,189,167,295,None,0,0,25.5,DRAINPUNCH;false;16,SUCKERPUNCH;false;8,SWORDSDANCE;false;32,ICEPUNCH;false;24,false,Normal=0=0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;==0;0;0;0;0;0=0=0=0=0=0=0=0=0=0=0=0=0=false=NONE=false=false=false=switch:0=false/none;5/none;5/false;5/false";
+    /// let serialized_state = "alakazam,100,Psychic,Typeless,Psychic,Typeless,251,251,NONE,NONE,LIFEORB,SERIOUS,32;0;32;0;1;0,121,148,353,206,365,None,0,0,25.5,PSYCHIC;false;16,GRASSKNOT;false;32,SHADOWBALL;false;24,HIDDENPOWERFIRE70;false;24,false,Normal=skarmory,100,Steel,Flying,Steel,Flying,271,271,STURDY,STURDY,CUSTAPBERRY,SERIOUS,,259,316,104,177,262,None,0,0,25.5,STEALTHROCK;false;32,SPIKES;false;32,BRAVEBIRD;false;24,THIEF;false;40,false,Normal=tyranitar,100,Rock,Dark,Rock,Dark,404,404,SANDSTREAM,SANDSTREAM,CHOPLEBERRY,SERIOUS,,305,256,203,327,159,None,0,0,25.5,CRUNCH;false;24,SUPERPOWER;false;8,THUNDERWAVE;false;32,PURSUIT;false;32,false,Normal=mamoswine,100,Ice,Ground,Ice,Ground,362,362,THICKFAT,THICKFAT,NEVERMELTICE,SERIOUS,,392,196,158,176,241,None,0,0,25.5,ICESHARD;false;48,EARTHQUAKE;false;16,SUPERPOWER;false;8,ICICLECRASH;false;16,false,Normal=jellicent,100,Water,Ghost,Water,Ghost,404,404,WATERABSORB,WATERABSORB,AIRBALLOON,SERIOUS,,140,237,206,246,180,None,0,0,25.5,TAUNT;false;32,NIGHTSHADE;false;24,WILLOWISP;false;24,RECOVER;false;16,false,Normal=excadrill,100,Ground,Steel,Ground,Steel,362,362,SANDFORCE,SANDFORCE,CHOICESCARF,SERIOUS,,367,156,122,168,302,None,0,0,25.5,EARTHQUAKE;false;16,IRONHEAD;false;24,ROCKSLIDE;false;16,RAPIDSPIN;false;64,false,Normal=0=0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;==0;0;0;0;0;0=0=0=0=0=0=0=0=0=0=0=0=0=false=NONE=false=false=false=switch:0=false/terrakion,100,Rock,Fighting,Rock,Fighting,323,323,NONE,NONE,FOCUSSASH,SERIOUS,,357,216,163,217,346,None,0,0,25.5,CLOSECOMBAT;false;8,STONEEDGE;false;8,STEALTHROCK;false;32,TAUNT;false;32,false,Normal=lucario,100,Fighting,Steel,Fighting,Steel,281,281,NONE,NONE,LIFEORB,SERIOUS,,350,176,241,177,279,None,0,0,25.5,CLOSECOMBAT;false;8,EXTREMESPEED;false;8,SWORDSDANCE;false;32,CRUNCH;false;24,false,Normal=breloom,100,Grass,Fighting,Grass,Fighting,262,262,TECHNICIAN,TECHNICIAN,LIFEORB,SERIOUS,,394,196,141,156,239,None,0,0,25.5,MACHPUNCH;false;48,BULLETSEED;false;48,SWORDSDANCE;false;32,LOWSWEEP;false;32,false,Normal=keldeo,100,Water,Fighting,Water,Fighting,323,323,NONE,NONE,LEFTOVERS,SERIOUS,,163,216,357,217,346,None,0,0,25.5,SECRETSWORD;false;16,HYDROPUMP;false;8,SCALD;false;24,SURF;false;24,false,Normal=conkeldurr,100,Fighting,Typeless,Fighting,Typeless,414,414,GUTS,GUTS,LEFTOVERS,SERIOUS,,416,226,132,167,126,None,0,0,25.5,MACHPUNCH;false;48,DRAINPUNCH;false;16,ICEPUNCH;false;24,THUNDERPUNCH;false;24,false,Normal=toxicroak,100,Poison,Fighting,Poison,Fighting,307,307,DRYSKIN,DRYSKIN,LIFEORB,SERIOUS,,311,166,189,167,295,None,0,0,25.5,DRAINPUNCH;false;16,SUCKERPUNCH;false;8,SWORDSDANCE;false;32,ICEPUNCH;false;24,false,Normal=0=0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;==0;0;0;0;0;0=0=0=0=0=0=0=0=0=0=0=0=0=false=NONE=false=false=false=switch:0=false/none;5/none;5/false;5/false";
     /// let state2 = State::deserialize(serialized_state);
     /// assert_eq!(state.serialize(), state2.serialize());
     ///
@@ -2719,5 +2748,34 @@ impl State {
         };
         state.set_conditional_mechanics();
         state
+    }
+}
+
+#[cfg(test)]
+mod champions_ev_tests {
+    use super::*;
+
+    #[test]
+    fn accepts_valid_champions_stat_points() {
+        assert_eq!(
+            validate_champions_evs((32, 0, 32, 0, 1, 0)).unwrap(),
+            (32, 0, 32, 0, 1, 0)
+        );
+    }
+
+    #[test]
+    fn rejects_traditional_ev_values() {
+        assert!(validate_champions_evs((252, 0, 0, 0, 0, 0)).is_err());
+    }
+
+    #[test]
+    fn rejects_too_many_total_champions_stat_points() {
+        assert!(validate_champions_evs((32, 32, 32, 0, 0, 0)).is_err());
+    }
+
+    #[test]
+    #[should_panic(expected = "invalid Champions stat points")]
+    fn deserialize_rejects_traditional_ev_values() {
+        Pokemon::deserialize("pikachu,50,Normal,Typeless,Normal,Typeless,100,100,NONE,NONE,NONE,SERIOUS,252;0;0;0;0;0,100,100,100,100,100,None,0,0,1.0,NONE;true;0,NONE;true;0,NONE;true;0,NONE;true;0,false,Normal,0,false");
     }
 }

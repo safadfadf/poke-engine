@@ -17,9 +17,9 @@ use poke_engine::mcts::{perform_mcts, MctsResult, MctsSideResult};
 use poke_engine::pokemon::PokemonName;
 use poke_engine::search::iterative_deepen_expectiminimax;
 use poke_engine::state::{
-    LastUsedMove, Move, Pokemon, PokemonIndex, PokemonMoves, PokemonNature, PokemonStatus,
-    PokemonType, PokemonVolatileStatusSet, Side, SideConditions, SidePokemon, State, StateTerrain,
-    StateTrickRoom, StateWeather, VolatileStatusDurations,
+    validate_champions_evs, LastUsedMove, Move, Pokemon, PokemonIndex, PokemonMoves, PokemonNature,
+    PokemonStatus, PokemonType, PokemonVolatileStatusSet, Side, SideConditions, SidePokemon, State,
+    StateTerrain, StateTrickRoom, StateWeather, VolatileStatusDurations,
 };
 use std::str::FromStr;
 use std::time::Duration;
@@ -671,9 +671,7 @@ impl Into<Pokemon> for PyPokemon {
             base_ability: Abilities::from_str(&self.base_ability).unwrap(),
             item: Items::from_str(&self.item).unwrap(),
             nature: PokemonNature::from_str(&self.nature).unwrap(),
-            evs: (
-                self.evs.0, self.evs.1, self.evs.2, self.evs.3, self.evs.4, self.evs.5,
-            ),
+            evs: validate_champions_evs(self.evs).expect("invalid Champions stat points"),
             attack: self.attack,
             defense: self.defense,
             special_attack: self.special_attack,
@@ -753,11 +751,12 @@ impl PyPokemon {
         terastallized: bool,
         tera_type: String,
         mega_evolved: bool,
-    ) -> Self {
+    ) -> PyResult<Self> {
+        validate_champions_evs(evs).map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
         if base_ability == "" {
             base_ability = ability.clone();
         }
-        PyPokemon {
+        Ok(PyPokemon {
             id,
             level,
             types,
@@ -783,7 +782,7 @@ impl PyPokemon {
             tera_type,
             mega_evolved,
             moves,
-        }
+        })
     }
     #[staticmethod]
     pub fn create_fainted() -> PyPokemon {

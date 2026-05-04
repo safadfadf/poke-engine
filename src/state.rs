@@ -5,7 +5,7 @@ use crate::engine::items::Items;
 use crate::engine::state::{PokemonVolatileStatus, Terrain, Weather};
 use crate::instruction::{BoostInstruction, EnableMoveInstruction, Instruction};
 use crate::pokemon::PokemonName;
-use std::collections::HashSet;
+use std::iter::FromIterator;
 use std::ops::{Index, IndexMut};
 use std::str::FromStr;
 
@@ -140,7 +140,7 @@ define_enum_with_from_str! {
 
 define_enum_with_from_str! {
     #[repr(u8)]
-    #[derive(Debug, PartialEq, Clone)]
+    #[derive(Debug, PartialEq, Clone, Copy)]
     PokemonNature {
         HARDY,
         LONELY,
@@ -170,6 +170,41 @@ define_enum_with_from_str! {
     }
 }
 
+impl PokemonNature {
+    pub fn modifier(self, stat_index: usize) -> (i16, i16) {
+        let (plus, minus) = match self {
+            PokemonNature::LONELY => (Some(1), Some(2)),
+            PokemonNature::ADAMANT => (Some(1), Some(3)),
+            PokemonNature::NAUGHTY => (Some(1), Some(4)),
+            PokemonNature::BRAVE => (Some(1), Some(5)),
+            PokemonNature::BOLD => (Some(2), Some(1)),
+            PokemonNature::IMPISH => (Some(2), Some(3)),
+            PokemonNature::LAX => (Some(2), Some(4)),
+            PokemonNature::RELAXED => (Some(2), Some(5)),
+            PokemonNature::MODEST => (Some(3), Some(1)),
+            PokemonNature::MILD => (Some(3), Some(2)),
+            PokemonNature::RASH => (Some(3), Some(4)),
+            PokemonNature::QUIET => (Some(3), Some(5)),
+            PokemonNature::CALM => (Some(4), Some(1)),
+            PokemonNature::GENTLE => (Some(4), Some(2)),
+            PokemonNature::CAREFUL => (Some(4), Some(3)),
+            PokemonNature::SASSY => (Some(4), Some(5)),
+            PokemonNature::TIMID => (Some(5), Some(1)),
+            PokemonNature::HASTY => (Some(5), Some(2)),
+            PokemonNature::JOLLY => (Some(5), Some(3)),
+            PokemonNature::NAIVE => (Some(5), Some(4)),
+            _ => (None, None),
+        };
+        if plus == Some(stat_index) {
+            (11, 10)
+        } else if minus == Some(stat_index) {
+            (9, 10)
+        } else {
+            (1, 1)
+        }
+    }
+}
+
 define_enum_with_from_str! {
     #[repr(u8)]
     #[derive(Debug, Clone, Copy, PartialEq)]
@@ -196,6 +231,228 @@ define_enum_with_from_str! {
         TYPELESS,
     },
     default = TYPELESS
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PokemonVolatileStatusSet {
+    bits: u128,
+}
+
+impl Default for PokemonVolatileStatusSet {
+    fn default() -> Self {
+        Self { bits: 0 }
+    }
+}
+
+impl PokemonVolatileStatusSet {
+    fn bit(status: PokemonVolatileStatus) -> u128 {
+        if status == PokemonVolatileStatus::NONE {
+            0
+        } else {
+            1u128 << (status as u8)
+        }
+    }
+
+    fn from_bit_index(index: u8) -> Option<PokemonVolatileStatus> {
+        match index {
+            1 => Some(PokemonVolatileStatus::AQUARING),
+            2 => Some(PokemonVolatileStatus::ATTRACT),
+            3 => Some(PokemonVolatileStatus::AUTOTOMIZE),
+            4 => Some(PokemonVolatileStatus::BANEFULBUNKER),
+            5 => Some(PokemonVolatileStatus::BIDE),
+            6 => Some(PokemonVolatileStatus::BOUNCE),
+            7 => Some(PokemonVolatileStatus::BURNINGBULWARK),
+            8 => Some(PokemonVolatileStatus::CHARGE),
+            9 => Some(PokemonVolatileStatus::CONFUSION),
+            10 => Some(PokemonVolatileStatus::CURSE),
+            11 => Some(PokemonVolatileStatus::DEFENSECURL),
+            12 => Some(PokemonVolatileStatus::DESTINYBOND),
+            13 => Some(PokemonVolatileStatus::DIG),
+            14 => Some(PokemonVolatileStatus::DISABLE),
+            15 => Some(PokemonVolatileStatus::DIVE),
+            16 => Some(PokemonVolatileStatus::ELECTRIFY),
+            17 => Some(PokemonVolatileStatus::ELECTROSHOT),
+            18 => Some(PokemonVolatileStatus::EMBARGO),
+            19 => Some(PokemonVolatileStatus::ENCORE),
+            20 => Some(PokemonVolatileStatus::ENDURE),
+            21 => Some(PokemonVolatileStatus::FLASHFIRE),
+            22 => Some(PokemonVolatileStatus::FLINCH),
+            23 => Some(PokemonVolatileStatus::FLY),
+            24 => Some(PokemonVolatileStatus::FOCUSENERGY),
+            25 => Some(PokemonVolatileStatus::FOLLOWME),
+            26 => Some(PokemonVolatileStatus::FORESIGHT),
+            27 => Some(PokemonVolatileStatus::FREEZESHOCK),
+            28 => Some(PokemonVolatileStatus::GASTROACID),
+            29 => Some(PokemonVolatileStatus::GEOMANCY),
+            30 => Some(PokemonVolatileStatus::GLAIVERUSH),
+            31 => Some(PokemonVolatileStatus::GRUDGE),
+            32 => Some(PokemonVolatileStatus::HEALBLOCK),
+            33 => Some(PokemonVolatileStatus::HELPINGHAND),
+            34 => Some(PokemonVolatileStatus::ICEBURN),
+            35 => Some(PokemonVolatileStatus::IMPRISON),
+            36 => Some(PokemonVolatileStatus::INGRAIN),
+            37 => Some(PokemonVolatileStatus::KINGSSHIELD),
+            38 => Some(PokemonVolatileStatus::LASERFOCUS),
+            39 => Some(PokemonVolatileStatus::LEECHSEED),
+            40 => Some(PokemonVolatileStatus::LIGHTSCREEN),
+            41 => Some(PokemonVolatileStatus::LOCKEDMOVE),
+            42 => Some(PokemonVolatileStatus::MAGICCOAT),
+            43 => Some(PokemonVolatileStatus::MAGNETRISE),
+            44 => Some(PokemonVolatileStatus::MAXGUARD),
+            45 => Some(PokemonVolatileStatus::METEORBEAM),
+            46 => Some(PokemonVolatileStatus::MINIMIZE),
+            47 => Some(PokemonVolatileStatus::MIRACLEEYE),
+            48 => Some(PokemonVolatileStatus::MUSTRECHARGE),
+            49 => Some(PokemonVolatileStatus::NIGHTMARE),
+            50 => Some(PokemonVolatileStatus::NORETREAT),
+            51 => Some(PokemonVolatileStatus::OCTOLOCK),
+            52 => Some(PokemonVolatileStatus::PARTIALLYTRAPPED),
+            53 => Some(PokemonVolatileStatus::PERISH4),
+            54 => Some(PokemonVolatileStatus::PERISH3),
+            55 => Some(PokemonVolatileStatus::PERISH2),
+            56 => Some(PokemonVolatileStatus::PERISH1),
+            57 => Some(PokemonVolatileStatus::PHANTOMFORCE),
+            58 => Some(PokemonVolatileStatus::POWDER),
+            59 => Some(PokemonVolatileStatus::POWERSHIFT),
+            60 => Some(PokemonVolatileStatus::POWERTRICK),
+            61 => Some(PokemonVolatileStatus::PROTECT),
+            62 => Some(PokemonVolatileStatus::PROTOSYNTHESISATK),
+            63 => Some(PokemonVolatileStatus::PROTOSYNTHESISDEF),
+            64 => Some(PokemonVolatileStatus::PROTOSYNTHESISSPA),
+            65 => Some(PokemonVolatileStatus::PROTOSYNTHESISSPD),
+            66 => Some(PokemonVolatileStatus::PROTOSYNTHESISSPE),
+            67 => Some(PokemonVolatileStatus::QUARKDRIVEATK),
+            68 => Some(PokemonVolatileStatus::QUARKDRIVEDEF),
+            69 => Some(PokemonVolatileStatus::QUARKDRIVESPA),
+            70 => Some(PokemonVolatileStatus::QUARKDRIVESPD),
+            71 => Some(PokemonVolatileStatus::QUARKDRIVESPE),
+            72 => Some(PokemonVolatileStatus::RAGE),
+            73 => Some(PokemonVolatileStatus::RAGEPOWDER),
+            74 => Some(PokemonVolatileStatus::RAZORWIND),
+            75 => Some(PokemonVolatileStatus::REFLECT),
+            76 => Some(PokemonVolatileStatus::ROOST),
+            77 => Some(PokemonVolatileStatus::SALTCURE),
+            78 => Some(PokemonVolatileStatus::SHADOWFORCE),
+            79 => Some(PokemonVolatileStatus::SKULLBASH),
+            80 => Some(PokemonVolatileStatus::SKYATTACK),
+            81 => Some(PokemonVolatileStatus::SKYDROP),
+            82 => Some(PokemonVolatileStatus::SILKTRAP),
+            83 => Some(PokemonVolatileStatus::SLOWSTART),
+            84 => Some(PokemonVolatileStatus::SMACKDOWN),
+            85 => Some(PokemonVolatileStatus::SNATCH),
+            86 => Some(PokemonVolatileStatus::SOLARBEAM),
+            87 => Some(PokemonVolatileStatus::SOLARBLADE),
+            88 => Some(PokemonVolatileStatus::SPARKLINGARIA),
+            89 => Some(PokemonVolatileStatus::SPIKYSHIELD),
+            90 => Some(PokemonVolatileStatus::SPOTLIGHT),
+            91 => Some(PokemonVolatileStatus::STOCKPILE),
+            92 => Some(PokemonVolatileStatus::SUBSTITUTE),
+            93 => Some(PokemonVolatileStatus::SYRUPBOMB),
+            94 => Some(PokemonVolatileStatus::TARSHOT),
+            95 => Some(PokemonVolatileStatus::TAUNT),
+            96 => Some(PokemonVolatileStatus::TELEKINESIS),
+            97 => Some(PokemonVolatileStatus::THROATCHOP),
+            98 => Some(PokemonVolatileStatus::TRUANT),
+            99 => Some(PokemonVolatileStatus::TORMENT),
+            100 => Some(PokemonVolatileStatus::TYPECHANGE),
+            101 => Some(PokemonVolatileStatus::UNBURDEN),
+            102 => Some(PokemonVolatileStatus::UPROAR),
+            103 => Some(PokemonVolatileStatus::YAWN),
+            _ => None,
+        }
+    }
+
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn contains(&self, status: &PokemonVolatileStatus) -> bool {
+        (self.bits & Self::bit(*status)) != 0
+    }
+
+    pub fn insert(&mut self, status: PokemonVolatileStatus) -> bool {
+        let bit = Self::bit(status);
+        let existed = (self.bits & bit) != 0;
+        self.bits |= bit;
+        !existed
+    }
+
+    pub fn remove(&mut self, status: &PokemonVolatileStatus) -> bool {
+        let bit = Self::bit(*status);
+        let existed = (self.bits & bit) != 0;
+        self.bits &= !bit;
+        existed
+    }
+
+    pub fn clear(&mut self) {
+        self.bits = 0;
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.bits == 0
+    }
+
+    pub fn retain<F>(&mut self, mut f: F)
+    where
+        F: FnMut(&PokemonVolatileStatus) -> bool,
+    {
+        let mut retained = Self::new();
+        for status in self.iter() {
+            if f(&status) {
+                retained.insert(status);
+            }
+        }
+        *self = retained;
+    }
+
+    pub fn iter(&self) -> PokemonVolatileStatusSetIter {
+        PokemonVolatileStatusSetIter {
+            bits: self.bits,
+            next_index: 1,
+        }
+    }
+}
+
+impl FromIterator<PokemonVolatileStatus> for PokemonVolatileStatusSet {
+    fn from_iter<T: IntoIterator<Item = PokemonVolatileStatus>>(iter: T) -> Self {
+        let mut set = Self::new();
+        for status in iter {
+            set.insert(status);
+        }
+        set
+    }
+}
+
+impl<'a> IntoIterator for &'a PokemonVolatileStatusSet {
+    type Item = PokemonVolatileStatus;
+    type IntoIter = PokemonVolatileStatusSetIter;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
+pub struct PokemonVolatileStatusSetIter {
+    bits: u128,
+    next_index: u8,
+}
+
+impl Iterator for PokemonVolatileStatusSetIter {
+    type Item = PokemonVolatileStatus;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        while self.next_index < 128 {
+            let bit_index = self.next_index;
+            self.next_index += 1;
+            if (self.bits & (1u128 << bit_index)) == 0 {
+                continue;
+            }
+            if let Some(status) = PokemonVolatileStatusSet::from_bit_index(bit_index) {
+                return Some(status);
+            }
+        }
+        None
+    }
 }
 
 impl Index<&PokemonMoveIndex> for PokemonMoves {
@@ -433,6 +690,12 @@ impl IndexMut<PokemonIndex> for SidePokemon {
     }
 }
 
+impl IndexMut<&PokemonIndex> for SidePokemon {
+    fn index_mut(&mut self, index: &PokemonIndex) -> &mut Self::Output {
+        &mut self.pkmn[*index as usize]
+    }
+}
+
 impl Default for Side {
     fn default() -> Side {
         Side {
@@ -460,12 +723,13 @@ impl Default for Side {
                 ..Default::default()
             },
             volatile_status_durations: VolatileStatusDurations::default(),
-            volatile_statuses: HashSet::<PokemonVolatileStatus>::new(),
+            volatile_statuses: PokemonVolatileStatusSet::new(),
             wish: (0, 0),
             future_sight: (0, PokemonIndex::P0),
             force_switch: false,
             slow_uturn_move: false,
             force_trapped: false,
+            mega_used: false,
             last_used_move: LastUsedMove::None,
             damage_dealt: DamageDealt::default(),
             switch_out_move_second_saved_move: Choices::NONE,
@@ -498,6 +762,11 @@ impl Move {
         }
     }
 }
+impl PartialEq for Move {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id && self.disabled == other.disabled && self.pp == other.pp
+    }
+}
 impl Default for Move {
     fn default() -> Move {
         Move {
@@ -526,7 +795,7 @@ impl Default for DamageDealt {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct PokemonMoves {
     pub m0: Move,
     pub m1: Move,
@@ -785,7 +1054,7 @@ impl VolatileStatusDurations {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct Pokemon {
     pub id: PokemonName,
     pub level: i8,
@@ -806,10 +1075,49 @@ pub struct Pokemon {
     pub status: PokemonStatus,
     pub rest_turns: i8,
     pub sleep_turns: i8,
+    pub freeze_turns: i8,
     pub weight_kg: f32,
     pub terastallized: bool,
     pub tera_type: PokemonType,
+    pub mega_evolved: bool,
     pub moves: PokemonMoves,
+}
+
+pub fn validate_champions_evs(
+    evs: (u8, u8, u8, u8, u8, u8),
+) -> Result<(u8, u8, u8, u8, u8, u8), String> {
+    let values = [evs.0, evs.1, evs.2, evs.3, evs.4, evs.5];
+    if let Some(value) = values.iter().find(|&&value| value > 32) {
+        return Err(format!(
+            "invalid Champions stat points {:?}: each value must be <= 32, got {}",
+            evs, value
+        ));
+    }
+    let total: u16 = values.iter().map(|&value| value as u16).sum();
+    if total > 66 {
+        return Err(format!(
+            "invalid Champions stat points {:?}: total must be <= 66, got {}",
+            evs, total
+        ));
+    }
+    Ok(evs)
+}
+
+fn deserialize_champions_evs(serialized: &str) -> (u8, u8, u8, u8, u8, u8) {
+    let values: Vec<u8> = serialized
+        .split(";")
+        .map(|value| value.parse::<u8>().unwrap())
+        .collect();
+    if values.len() != 6 {
+        panic!(
+            "invalid Champions stat points '{}': expected 6 values",
+            serialized
+        );
+    }
+    validate_champions_evs((
+        values[0], values[1], values[2], values[3], values[4], values[5],
+    ))
+    .unwrap_or_else(|err| panic!("{}", err))
 }
 
 impl Default for Pokemon {
@@ -825,7 +1133,7 @@ impl Default for Pokemon {
             base_ability: Abilities::NONE,
             item: Items::NONE,
             nature: PokemonNature::SERIOUS,
-            evs: (85, 85, 85, 85, 85, 85),
+            evs: (11, 11, 11, 11, 11, 11),
             attack: 100,
             defense: 100,
             special_attack: 100,
@@ -834,9 +1142,11 @@ impl Default for Pokemon {
             status: PokemonStatus::NONE,
             rest_turns: 0,
             sleep_turns: 0,
+            freeze_turns: 0,
             weight_kg: 1.0,
             terastallized: false,
             tera_type: PokemonType::NORMAL,
+            mega_evolved: false,
             moves: PokemonMoves {
                 m0: Default::default(),
                 m1: Default::default(),
@@ -899,7 +1209,7 @@ impl Pokemon {
             self.evs.0, self.evs.1, self.evs.2, self.evs.3, self.evs.4, self.evs.5
         );
         format!(
-            "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+            "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
             self.id,
             self.level,
             self.types.0.to_string(),
@@ -928,23 +1238,17 @@ impl Pokemon {
             self.moves.m3.serialize(),
             self.terastallized,
             self.tera_type.to_string(),
+            self.freeze_turns,
+            self.mega_evolved,
         )
     }
 
     pub fn deserialize(serialized: &str) -> Pokemon {
         let split: Vec<&str> = serialized.split(",").collect();
         let evs = if split[12] != "" {
-            let mut ev_iter = split[12].split(";");
-            (
-                ev_iter.next().unwrap().parse::<u8>().unwrap(),
-                ev_iter.next().unwrap().parse::<u8>().unwrap(),
-                ev_iter.next().unwrap().parse::<u8>().unwrap(),
-                ev_iter.next().unwrap().parse::<u8>().unwrap(),
-                ev_iter.next().unwrap().parse::<u8>().unwrap(),
-                ev_iter.next().unwrap().parse::<u8>().unwrap(),
-            )
+            deserialize_champions_evs(split[12])
         } else {
-            (85, 85, 85, 85, 85, 85)
+            (11, 11, 11, 11, 11, 11)
         };
         Pokemon {
             id: PokemonName::from_str(split[0]).unwrap(),
@@ -981,6 +1285,14 @@ impl Pokemon {
             },
             terastallized: split[26].parse::<bool>().unwrap(),
             tera_type: PokemonType::from_str(split[27]).unwrap(),
+            freeze_turns: split
+                .get(28)
+                .and_then(|value| value.parse::<i8>().ok())
+                .unwrap_or(0),
+            mega_evolved: split
+                .get(29)
+                .and_then(|value| value.parse::<bool>().ok())
+                .unwrap_or(false),
         }
     }
 }
@@ -998,7 +1310,8 @@ pub struct Side {
     pub force_switch: bool,
     pub force_trapped: bool,
     pub slow_uturn_move: bool,
-    pub volatile_statuses: HashSet<PokemonVolatileStatus>,
+    pub mega_used: bool,
+    pub volatile_statuses: PokemonVolatileStatusSet,
     pub substitute_health: i16,
     pub attack_boost: i8,
     pub defense_boost: i8,
@@ -1084,7 +1397,7 @@ impl Side {
             vs_string.push_str(":");
         }
         format!(
-            "{}={}={}={}={}={}={}={}={}={}={}={}={}={}={}={}={}={}={}={}={}={}={}={}={}={}={}={}={}",
+            "{}={}={}={}={}={}={}={}={}={}={}={}={}={}={}={}={}={}={}={}={}={}={}={}={}={}={}={}={}={}",
             self.pokemon.pkmn[0].serialize(),
             self.pokemon.pkmn[1].serialize(),
             self.pokemon.pkmn[2].serialize(),
@@ -1114,15 +1427,18 @@ impl Side {
             self.force_trapped,
             self.last_used_move.serialize(),
             self.slow_uturn_move,
+            self.mega_used,
         )
     }
     pub fn deserialize(serialized: &str) -> Side {
         let split: Vec<&str> = serialized.split("=").collect();
 
-        let mut vs_hashset = HashSet::new();
+        let mut vs_set = PokemonVolatileStatusSet::new();
         if split[8] != "" {
             for item in split[8].split(":") {
-                vs_hashset.insert(PokemonVolatileStatus::from_str(item).unwrap());
+                if !item.is_empty() {
+                    vs_set.insert(PokemonVolatileStatus::from_str(item).unwrap());
+                }
             }
         }
         Side {
@@ -1138,7 +1454,7 @@ impl Side {
             },
             active_index: PokemonIndex::deserialize(split[6]),
             side_conditions: SideConditions::deserialize(split[7]),
-            volatile_statuses: vs_hashset,
+            volatile_statuses: vs_set,
             volatile_status_durations: VolatileStatusDurations::deserialize(split[9]),
             substitute_health: split[10].parse::<i16>().unwrap(),
             attack_boost: split[11].parse::<i8>().unwrap(),
@@ -1164,6 +1480,9 @@ impl Side {
             last_used_move: LastUsedMove::deserialize(split[27]),
             damage_dealt: DamageDealt::default(),
             slow_uturn_move: split[28].parse::<bool>().unwrap(),
+            mega_used: split
+                .get(29)
+                .map_or(false, |value| value.parse::<bool>().unwrap()),
         }
     }
 }
@@ -1285,6 +1604,7 @@ impl Default for State {
     }
 }
 impl State {
+    #[inline]
     pub fn battle_is_over(&self) -> f32 {
         //  0 if battle is not over
         //  1 if side one has won
@@ -1298,6 +1618,7 @@ impl State {
         0.0
     }
 
+    #[inline]
     pub fn get_side(&mut self, side_ref: &SideReference) -> &mut Side {
         match side_ref {
             SideReference::SideOne => &mut self.side_one,
@@ -1305,6 +1626,7 @@ impl State {
         }
     }
 
+    #[inline]
     pub fn get_side_immutable(&self, side_ref: &SideReference) -> &Side {
         match side_ref {
             SideReference::SideOne => &self.side_one,
@@ -1312,6 +1634,7 @@ impl State {
         }
     }
 
+    #[inline]
     pub fn get_both_sides(&mut self, side_ref: &SideReference) -> (&mut Side, &mut Side) {
         match side_ref {
             SideReference::SideOne => (&mut self.side_one, &mut self.side_two),
@@ -1319,6 +1642,7 @@ impl State {
         }
     }
 
+    #[inline]
     pub fn get_both_sides_immutable(&self, side_ref: &SideReference) -> (&Side, &Side) {
         match side_ref {
             SideReference::SideOne => (&self.side_one, &self.side_two),
@@ -1458,6 +1782,39 @@ impl State {
         previous_active_index: PokemonIndex,
     ) {
         let side = self.get_side(&side_ref);
+        side.active_index = previous_active_index;
+    }
+
+    fn apply_team_preview(
+        &mut self,
+        side_ref: &SideReference,
+        lead_index: PokemonIndex,
+        reserve_index_one: PokemonIndex,
+        reserve_index_two: PokemonIndex,
+    ) {
+        self.team_preview = false;
+        let side = self.get_side(&side_ref);
+        let previous_pokemon = side.pokemon.clone();
+        side.pokemon.pkmn = [
+            previous_pokemon[lead_index].clone(),
+            previous_pokemon[reserve_index_one].clone(),
+            previous_pokemon[reserve_index_two].clone(),
+            Pokemon::default(),
+            Pokemon::default(),
+            Pokemon::default(),
+        ];
+        side.active_index = PokemonIndex::P0;
+    }
+
+    fn reverse_team_preview(
+        &mut self,
+        side_ref: &SideReference,
+        previous_active_index: PokemonIndex,
+        previous_pokemon: String,
+    ) {
+        self.team_preview = true;
+        let side = self.get_side(&side_ref);
+        side.pokemon = Side::deserialize(&previous_pokemon).pokemon;
         side.active_index = previous_active_index;
     }
 
@@ -1678,6 +2035,15 @@ impl State {
         self.get_side(side_reference).pokemon[pokemon_index].sleep_turns = amount;
     }
 
+    fn set_freeze_turn(
+        &mut self,
+        side_reference: &SideReference,
+        pokemon_index: PokemonIndex,
+        amount: i8,
+    ) {
+        self.get_side(side_reference).pokemon[pokemon_index].freeze_turns = amount;
+    }
+
     fn toggle_trickroom(&mut self, new_turns_remaining: i8) {
         self.trick_room.active = !self.trick_room.active;
         self.trick_room.turns_remaining = new_turns_remaining;
@@ -1714,12 +2080,14 @@ impl State {
         }
     }
 
-    pub fn apply_instructions(&mut self, instructions: &Vec<Instruction>) {
+    #[inline]
+    pub fn apply_instructions(&mut self, instructions: &[Instruction]) {
         for i in instructions {
             self.apply_one_instruction(i)
         }
     }
 
+    #[inline]
     pub fn apply_one_instruction(&mut self, instruction: &Instruction) {
         match instruction {
             Instruction::Damage(instruction) => {
@@ -1729,6 +2097,12 @@ impl State {
                 &instruction.side_ref,
                 instruction.next_index,
                 instruction.previous_index,
+            ),
+            Instruction::TeamPreview(instruction) => self.apply_team_preview(
+                &instruction.side_ref,
+                instruction.lead_index,
+                instruction.reserve_index_one,
+                instruction.reserve_index_two,
             ),
             Instruction::ApplyVolatileStatus(instruction) => {
                 self.apply_volatile_status(&instruction.side_ref, instruction.volatile_status)
@@ -1776,6 +2150,11 @@ impl State {
                 let active = self.get_side(&instruction.side_ref).get_active();
                 active.ability =
                     Abilities::from(active.ability as i16 + instruction.ability_change);
+            }
+            Instruction::ChangeBaseAbility(instruction) => {
+                let active = self.get_side(&instruction.side_ref).get_active();
+                active.base_ability =
+                    Abilities::from(active.base_ability as i16 + instruction.ability_change);
             }
             Instruction::Heal(instruction) => {
                 self.heal(&instruction.side_ref, instruction.heal_amount)
@@ -1840,6 +2219,13 @@ impl State {
                     instruction.new_turns,
                 );
             }
+            Instruction::SetFreezeTurns(instruction) => {
+                self.set_freeze_turn(
+                    &instruction.side_ref,
+                    instruction.pokemon_index,
+                    instruction.new_turns,
+                );
+            }
             Instruction::DecrementRestTurns(instruction) => {
                 self.decrement_rest_turn(&instruction.side_ref);
             }
@@ -1873,6 +2259,15 @@ impl State {
                 SideReference::SideOne => self.side_one.get_active().terastallized ^= true,
                 SideReference::SideTwo => self.side_two.get_active().terastallized ^= true,
             },
+            Instruction::ToggleMegaEvolved(instruction) => {
+                self.get_side(&instruction.side_ref).pokemon[&instruction.pokemon_index]
+                    .mega_evolved ^= true;
+                self.get_side(&instruction.side_ref).mega_used = self
+                    .get_side(&instruction.side_ref)
+                    .pokemon
+                    .into_iter()
+                    .any(|p| p.mega_evolved);
+            }
             Instruction::SetLastUsedMove(instruction) => {
                 self.set_last_used_move(&instruction.side_ref, instruction.last_used_move)
             }
@@ -1901,12 +2296,14 @@ impl State {
         }
     }
 
-    pub fn reverse_instructions(&mut self, instructions: &Vec<Instruction>) {
+    #[inline]
+    pub fn reverse_instructions(&mut self, instructions: &[Instruction]) {
         for i in instructions.iter().rev() {
             self.reverse_one_instruction(i);
         }
     }
 
+    #[inline]
     pub fn reverse_one_instruction(&mut self, instruction: &Instruction) {
         match instruction {
             Instruction::Damage(instruction) => {
@@ -1916,6 +2313,11 @@ impl State {
                 &instruction.side_ref,
                 instruction.next_index,
                 instruction.previous_index,
+            ),
+            Instruction::TeamPreview(instruction) => self.reverse_team_preview(
+                &instruction.side_ref,
+                instruction.previous_active_index,
+                instruction.previous_pokemon.clone(),
             ),
             Instruction::ApplyVolatileStatus(instruction) => {
                 self.remove_volatile_status(&instruction.side_ref, instruction.volatile_status)
@@ -1965,6 +2367,11 @@ impl State {
                 let active = self.get_side(&instruction.side_ref).get_active();
                 active.ability =
                     Abilities::from(active.ability as i16 - instruction.ability_change);
+            }
+            Instruction::ChangeBaseAbility(instruction) => {
+                let active = self.get_side(&instruction.side_ref).get_active();
+                active.base_ability =
+                    Abilities::from(active.base_ability as i16 - instruction.ability_change);
             }
             Instruction::EnableMove(instruction) => {
                 self.disable_move(&instruction.side_ref, &instruction.move_index)
@@ -2027,6 +2434,13 @@ impl State {
                     instruction.previous_turns,
                 );
             }
+            Instruction::SetFreezeTurns(instruction) => {
+                self.set_freeze_turn(
+                    &instruction.side_ref,
+                    instruction.pokemon_index,
+                    instruction.previous_turns,
+                );
+            }
             Instruction::DecrementRestTurns(instruction) => {
                 self.increment_rest_turn(&instruction.side_ref);
             }
@@ -2060,6 +2474,15 @@ impl State {
                 SideReference::SideOne => self.side_one.get_active().terastallized ^= true,
                 SideReference::SideTwo => self.side_two.get_active().terastallized ^= true,
             },
+            Instruction::ToggleMegaEvolved(instruction) => {
+                self.get_side(&instruction.side_ref).pokemon[&instruction.pokemon_index]
+                    .mega_evolved ^= true;
+                self.get_side(&instruction.side_ref).mega_used = self
+                    .get_side(&instruction.side_ref)
+                    .pokemon
+                    .into_iter()
+                    .any(|p| p.mega_evolved);
+            }
             Instruction::SetLastUsedMove(instruction) => {
                 self.set_last_used_move(&instruction.side_ref, instruction.previous_last_used_move)
             }
@@ -2193,9 +2616,9 @@ impl State {
     /// // nature
     /// "SERIOUS,",
     ///
-    /// // EVs split by `;`. Leave blank for default EVs (85 in all)
-    /// "252;0;252;0;4;0,",
-    /// // ",", left blank for default EVs
+    /// // Champions stat points split by `;`. Leave blank for default points (11 in all)
+    /// "32;0;32;0;1;0,",
+    /// // ",", left blank for default stat points
     ///
     /// // attack,defense,special attack,special defense,speed
     /// // note these are final stats, not base stats
@@ -2306,7 +2729,7 @@ impl State {
     ///
     ///
     /// // the same state, but all in one line
-    /// let serialized_state = "alakazam,100,Psychic,Typeless,Psychic,Typeless,251,251,NONE,NONE,LIFEORB,SERIOUS,252;0;252;0;4;0,121,148,353,206,365,None,0,0,25.5,PSYCHIC;false;16,GRASSKNOT;false;32,SHADOWBALL;false;24,HIDDENPOWERFIRE70;false;24,false,Normal=skarmory,100,Steel,Flying,Steel,Flying,271,271,STURDY,STURDY,CUSTAPBERRY,SERIOUS,,259,316,104,177,262,None,0,0,25.5,STEALTHROCK;false;32,SPIKES;false;32,BRAVEBIRD;false;24,THIEF;false;40,false,Normal=tyranitar,100,Rock,Dark,Rock,Dark,404,404,SANDSTREAM,SANDSTREAM,CHOPLEBERRY,SERIOUS,,305,256,203,327,159,None,0,0,25.5,CRUNCH;false;24,SUPERPOWER;false;8,THUNDERWAVE;false;32,PURSUIT;false;32,false,Normal=mamoswine,100,Ice,Ground,Ice,Ground,362,362,THICKFAT,THICKFAT,NEVERMELTICE,SERIOUS,,392,196,158,176,241,None,0,0,25.5,ICESHARD;false;48,EARTHQUAKE;false;16,SUPERPOWER;false;8,ICICLECRASH;false;16,false,Normal=jellicent,100,Water,Ghost,Water,Ghost,404,404,WATERABSORB,WATERABSORB,AIRBALLOON,SERIOUS,,140,237,206,246,180,None,0,0,25.5,TAUNT;false;32,NIGHTSHADE;false;24,WILLOWISP;false;24,RECOVER;false;16,false,Normal=excadrill,100,Ground,Steel,Ground,Steel,362,362,SANDFORCE,SANDFORCE,CHOICESCARF,SERIOUS,,367,156,122,168,302,None,0,0,25.5,EARTHQUAKE;false;16,IRONHEAD;false;24,ROCKSLIDE;false;16,RAPIDSPIN;false;64,false,Normal=0=0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;==0;0;0;0;0;0=0=0=0=0=0=0=0=0=0=0=0=0=false=NONE=false=false=false=switch:0=false/terrakion,100,Rock,Fighting,Rock,Fighting,323,323,NONE,NONE,FOCUSSASH,SERIOUS,,357,216,163,217,346,None,0,0,25.5,CLOSECOMBAT;false;8,STONEEDGE;false;8,STEALTHROCK;false;32,TAUNT;false;32,false,Normal=lucario,100,Fighting,Steel,Fighting,Steel,281,281,NONE,NONE,LIFEORB,SERIOUS,,350,176,241,177,279,None,0,0,25.5,CLOSECOMBAT;false;8,EXTREMESPEED;false;8,SWORDSDANCE;false;32,CRUNCH;false;24,false,Normal=breloom,100,Grass,Fighting,Grass,Fighting,262,262,TECHNICIAN,TECHNICIAN,LIFEORB,SERIOUS,,394,196,141,156,239,None,0,0,25.5,MACHPUNCH;false;48,BULLETSEED;false;48,SWORDSDANCE;false;32,LOWSWEEP;false;32,false,Normal=keldeo,100,Water,Fighting,Water,Fighting,323,323,NONE,NONE,LEFTOVERS,SERIOUS,,163,216,357,217,346,None,0,0,25.5,SECRETSWORD;false;16,HYDROPUMP;false;8,SCALD;false;24,SURF;false;24,false,Normal=conkeldurr,100,Fighting,Typeless,Fighting,Typeless,414,414,GUTS,GUTS,LEFTOVERS,SERIOUS,,416,226,132,167,126,None,0,0,25.5,MACHPUNCH;false;48,DRAINPUNCH;false;16,ICEPUNCH;false;24,THUNDERPUNCH;false;24,false,Normal=toxicroak,100,Poison,Fighting,Poison,Fighting,307,307,DRYSKIN,DRYSKIN,LIFEORB,SERIOUS,,311,166,189,167,295,None,0,0,25.5,DRAINPUNCH;false;16,SUCKERPUNCH;false;8,SWORDSDANCE;false;32,ICEPUNCH;false;24,false,Normal=0=0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;==0;0;0;0;0;0=0=0=0=0=0=0=0=0=0=0=0=0=false=NONE=false=false=false=switch:0=false/none;5/none;5/false;5/false";
+    /// let serialized_state = "alakazam,100,Psychic,Typeless,Psychic,Typeless,251,251,NONE,NONE,LIFEORB,SERIOUS,32;0;32;0;1;0,121,148,353,206,365,None,0,0,25.5,PSYCHIC;false;16,GRASSKNOT;false;32,SHADOWBALL;false;24,HIDDENPOWERFIRE70;false;24,false,Normal=skarmory,100,Steel,Flying,Steel,Flying,271,271,STURDY,STURDY,CUSTAPBERRY,SERIOUS,,259,316,104,177,262,None,0,0,25.5,STEALTHROCK;false;32,SPIKES;false;32,BRAVEBIRD;false;24,THIEF;false;40,false,Normal=tyranitar,100,Rock,Dark,Rock,Dark,404,404,SANDSTREAM,SANDSTREAM,CHOPLEBERRY,SERIOUS,,305,256,203,327,159,None,0,0,25.5,CRUNCH;false;24,SUPERPOWER;false;8,THUNDERWAVE;false;32,PURSUIT;false;32,false,Normal=mamoswine,100,Ice,Ground,Ice,Ground,362,362,THICKFAT,THICKFAT,NEVERMELTICE,SERIOUS,,392,196,158,176,241,None,0,0,25.5,ICESHARD;false;48,EARTHQUAKE;false;16,SUPERPOWER;false;8,ICICLECRASH;false;16,false,Normal=jellicent,100,Water,Ghost,Water,Ghost,404,404,WATERABSORB,WATERABSORB,AIRBALLOON,SERIOUS,,140,237,206,246,180,None,0,0,25.5,TAUNT;false;32,NIGHTSHADE;false;24,WILLOWISP;false;24,RECOVER;false;16,false,Normal=excadrill,100,Ground,Steel,Ground,Steel,362,362,SANDFORCE,SANDFORCE,CHOICESCARF,SERIOUS,,367,156,122,168,302,None,0,0,25.5,EARTHQUAKE;false;16,IRONHEAD;false;24,ROCKSLIDE;false;16,RAPIDSPIN;false;64,false,Normal=0=0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;==0;0;0;0;0;0=0=0=0=0=0=0=0=0=0=0=0=0=false=NONE=false=false=false=switch:0=false/terrakion,100,Rock,Fighting,Rock,Fighting,323,323,NONE,NONE,FOCUSSASH,SERIOUS,,357,216,163,217,346,None,0,0,25.5,CLOSECOMBAT;false;8,STONEEDGE;false;8,STEALTHROCK;false;32,TAUNT;false;32,false,Normal=lucario,100,Fighting,Steel,Fighting,Steel,281,281,NONE,NONE,LIFEORB,SERIOUS,,350,176,241,177,279,None,0,0,25.5,CLOSECOMBAT;false;8,EXTREMESPEED;false;8,SWORDSDANCE;false;32,CRUNCH;false;24,false,Normal=breloom,100,Grass,Fighting,Grass,Fighting,262,262,TECHNICIAN,TECHNICIAN,LIFEORB,SERIOUS,,394,196,141,156,239,None,0,0,25.5,MACHPUNCH;false;48,BULLETSEED;false;48,SWORDSDANCE;false;32,LOWSWEEP;false;32,false,Normal=keldeo,100,Water,Fighting,Water,Fighting,323,323,NONE,NONE,LEFTOVERS,SERIOUS,,163,216,357,217,346,None,0,0,25.5,SECRETSWORD;false;16,HYDROPUMP;false;8,SCALD;false;24,SURF;false;24,false,Normal=conkeldurr,100,Fighting,Typeless,Fighting,Typeless,414,414,GUTS,GUTS,LEFTOVERS,SERIOUS,,416,226,132,167,126,None,0,0,25.5,MACHPUNCH;false;48,DRAINPUNCH;false;16,ICEPUNCH;false;24,THUNDERPUNCH;false;24,false,Normal=toxicroak,100,Poison,Fighting,Poison,Fighting,307,307,DRYSKIN,DRYSKIN,LIFEORB,SERIOUS,,311,166,189,167,295,None,0,0,25.5,DRAINPUNCH;false;16,SUCKERPUNCH;false;8,SWORDSDANCE;false;32,ICEPUNCH;false;24,false,Normal=0=0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;==0;0;0;0;0;0=0=0=0=0=0=0=0=0=0=0=0=0=false=NONE=false=false=false=switch:0=false/none;5/none;5/false;5/false";
     /// let state2 = State::deserialize(serialized_state);
     /// assert_eq!(state.serialize(), state2.serialize());
     ///
@@ -2325,5 +2748,34 @@ impl State {
         };
         state.set_conditional_mechanics();
         state
+    }
+}
+
+#[cfg(test)]
+mod champions_ev_tests {
+    use super::*;
+
+    #[test]
+    fn accepts_valid_champions_stat_points() {
+        assert_eq!(
+            validate_champions_evs((32, 0, 32, 0, 1, 0)).unwrap(),
+            (32, 0, 32, 0, 1, 0)
+        );
+    }
+
+    #[test]
+    fn rejects_traditional_ev_values() {
+        assert!(validate_champions_evs((252, 0, 0, 0, 0, 0)).is_err());
+    }
+
+    #[test]
+    fn rejects_too_many_total_champions_stat_points() {
+        assert!(validate_champions_evs((32, 32, 32, 0, 0, 0)).is_err());
+    }
+
+    #[test]
+    #[should_panic(expected = "invalid Champions stat points")]
+    fn deserialize_rejects_traditional_ev_values() {
+        Pokemon::deserialize("pikachu,50,Normal,Typeless,Normal,Typeless,100,100,NONE,NONE,NONE,SERIOUS,252;0;0;0;0;0,100,100,100,100,100,None,0,0,1.0,NONE;true;0,NONE;true;0,NONE;true;0,NONE;true;0,false,Normal,0,false");
     }
 }

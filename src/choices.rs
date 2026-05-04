@@ -18123,7 +18123,7 @@ pub static MOVES: LazyLock<HashMap<Choices, Choice>> = LazyLock::new(|| {
         Choice {
             move_id: Choices::TRIPLEAXEL,
             accuracy: 90.0,
-            base_power: 40.0,
+            base_power: 20.0,
             category: MoveCategory::Physical,
             move_type: PokemonType::ICE,
             flags: Flags {
@@ -20510,6 +20510,9 @@ pub struct Choice {
     pub volatile_status: Option<VolatileStatus>,
     pub side_condition: Option<SideCondition>,
     pub secondaries: Option<Vec<Secondary>>,
+    pub bypasses_protect: bool,
+    pub protect_bypass_damage_multiplier: f32,
+    pub protected_damage_multiplier: f32,
 
     pub target: MoveTarget,
 
@@ -20566,7 +20569,7 @@ impl Choice {
             // These are multi-accuracy
             // but until that is implemented we approximate them as multi-hit
             Choices::POPULATIONBOMB => MultiHitMove::PopulationBomb,
-            Choices::TRIPLEAXEL => MultiHitMove::TripleAxel,
+            Choices::TRIPLEAXEL | Choices::TRIPLEKICK => MultiHitMove::TripleAxel,
             _ => MultiHitMove::None,
         }
     }
@@ -20641,6 +20644,9 @@ impl Default for Choice {
             volatile_status: None,
             side_condition: None,
             secondaries: None,
+            bypasses_protect: false,
+            protect_bypass_damage_multiplier: 1.0,
+            protected_damage_multiplier: 1.0,
             target: MoveTarget::Opponent,
             first_move: true,
             sleep_talk_move: false,

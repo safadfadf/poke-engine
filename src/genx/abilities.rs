@@ -1,6 +1,8 @@
 #![allow(unused_variables)]
 use super::damage_calc::type_effectiveness_modifier;
-use super::generate_instructions::{add_remove_status_instructions, apply_boost_instruction};
+use super::generate_instructions::{
+    add_remove_status_instructions, apply_boost_instruction, immune_to_status,
+};
 use super::items::{get_choice_move_disable_instructions, Items};
 use super::state::{PokemonVolatileStatus, Terrain, Weather};
 use crate::choices::{
@@ -347,6 +349,10 @@ define_enum_with_from_str! {
         WELLBAKEDBODY,
         WINDPOWER,
         ZEROTOHERO,
+        MEGASOL,
+        DRAGONIZE,
+        SPICYSPRAY,
+        PIERCINGDRILL,
     },
     default = NONE
 }
@@ -948,6 +954,11 @@ pub fn ability_after_damage_hit(
                 attacking_pkmn.hp -= damage_dealt;
             }
         }
+        Abilities::SPICYSPRAY => {
+            if damage_dealt > 0 {
+                apply_spicy_spray_burn(state, side_ref, instructions);
+            }
+        }
         Abilities::AFTERMATH => {
             if damage_dealt > 0
                 && defending_side.get_active_immutable().hp == 0
@@ -1010,6 +1021,41 @@ pub fn ability_after_damage_hit(
             }
         }
         _ => {}
+    }
+}
+
+fn apply_spicy_spray_burn(
+    state: &mut State,
+    side_ref: &SideReference,
+    instructions: &mut StateInstructions,
+) {
+    if immune_to_status(state, &MoveTarget::User, side_ref, &PokemonStatus::BURN) {
+        return;
+    }
+
+    let attacking_side = state.get_side(side_ref);
+    let active_index = attacking_side.active_index;
+    let attacking_pkmn = attacking_side.get_active();
+
+    if attacking_pkmn.item == Items::LUMBERRY {
+        instructions
+            .instruction_list
+            .push(Instruction::ChangeItem(ChangeItemInstruction {
+                side_ref: *side_ref,
+                current_item: Items::LUMBERRY,
+                new_item: Items::NONE,
+            }));
+        attacking_pkmn.item = Items::NONE;
+    } else {
+        instructions
+            .instruction_list
+            .push(Instruction::ChangeStatus(ChangeStatusInstruction {
+                side_ref: *side_ref,
+                pokemon_index: active_index,
+                old_status: attacking_pkmn.status,
+                new_status: PokemonStatus::BURN,
+            }));
+        attacking_pkmn.status = PokemonStatus::BURN;
     }
 }
 
@@ -1855,6 +1901,12 @@ pub fn ability_modify_attack_being_used(
                 attacker_choice.base_power *= 1.2;
             }
         }
+        Abilities::DRAGONIZE => {
+            if attacker_choice.move_type == PokemonType::NORMAL {
+                attacker_choice.move_type = PokemonType::DRAGON;
+                attacker_choice.base_power *= 1.2;
+            }
+        }
         #[cfg(any(feature = "gen9", feature = "gen8", feature = "gen7"))]
         Abilities::AERILATE => {
             if attacker_choice.move_type == PokemonType::NORMAL {
@@ -2144,7 +2196,13 @@ pub fn ability_modify_attack_being_used(
         }
         Abilities::UNSEENFIST => {
             if attacker_choice.flags.contact {
-                attacker_choice.flags.protect = false
+                attacker_choice.bypasses_protect = true;
+            }
+        }
+        Abilities::PIERCINGDRILL => {
+            if attacker_choice.flags.contact {
+                attacker_choice.bypasses_protect = true;
+                attacker_choice.protect_bypass_damage_multiplier = 0.25;
             }
         }
         Abilities::HUSTLE => {

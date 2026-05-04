@@ -148,6 +148,18 @@ fn weather_modifier(attacking_move_type: &PokemonType, weather: &Weather) -> f32
     }
 }
 
+fn damage_weather_for_attacker(state: &State, attacker: &Pokemon, defender: &Pokemon) -> Weather {
+    if attacker.ability == Abilities::MEGASOL
+        && defender.ability != Abilities::NEUTRALIZINGGAS
+        && defender.ability != Abilities::CLOUDNINE
+        && defender.ability != Abilities::AIRLOCK
+    {
+        Weather::SUN
+    } else {
+        state.weather.weather_type
+    }
+}
+
 fn stab_modifier(attacking_move_type: &PokemonType, active_pkmn: &Pokemon) -> f32 {
     if attacking_move_type == &PokemonType::TYPELESS {
         return 1.0;
@@ -531,8 +543,8 @@ fn common_pkmn_damage_calc(
         damage_modifier *= _type_effectiveness_modifier(&choice.move_type, &defender_types);
     }
 
-    if attacker.ability != Abilities::CLOUDNINE
-        && attacker.ability != Abilities::AIRLOCK
+    if (attacker.ability == Abilities::MEGASOL
+        || (attacker.ability != Abilities::CLOUDNINE && attacker.ability != Abilities::AIRLOCK))
         && defender.ability != Abilities::CLOUDNINE
         && defender.ability != Abilities::AIRLOCK
     {
@@ -543,6 +555,7 @@ fn common_pkmn_damage_calc(
     damage_modifier *= burn_modifier(&choice.category, &attacker.status);
     damage_modifier *= volatile_status_modifier(&choice, attacking_side, defending_side);
     damage_modifier *= terrain_modifier(terrain, attacker, defender, &choice);
+    damage_modifier *= choice.protected_damage_multiplier;
 
     damage * damage_modifier
 }
@@ -583,7 +596,7 @@ pub fn calculate_damage(
         defending_side,
         defender,
         defending_stat,
-        &state.weather.weather_type,
+        &damage_weather_for_attacker(state, attacker, defender),
         &state.terrain.terrain_type,
         choice,
     );
@@ -608,7 +621,7 @@ pub fn calculate_damage(
         defending_side,
         defender,
         crit_defending_stat,
-        &state.weather.weather_type,
+        &damage_weather_for_attacker(state, attacker, defender),
         &state.terrain.terrain_type,
         choice,
     );
@@ -662,12 +675,13 @@ pub fn calculate_futuresight_damage(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
     use std::iter::FromIterator;
 
     use super::super::state::{PokemonVolatileStatus, Weather};
     use super::*;
-    use crate::state::{PokemonStatus, PokemonType, SideReference, State};
+    use crate::state::{
+        PokemonStatus, PokemonType, PokemonVolatileStatusSet, SideReference, State,
+    };
 
     #[test]
     fn test_basic_damaging_move() {
@@ -977,8 +991,8 @@ mod tests {
                     let mut choice = Choice {
                         ..Default::default()
                     };
-                    state.side_one.volatile_statuses = HashSet::from_iter(attacking_volatile_status);
-                    state.side_two.volatile_statuses = HashSet::from_iter(defending_volatile_status);
+                    state.side_one.volatile_statuses = PokemonVolatileStatusSet::from_iter(attacking_volatile_status);
+                    state.side_two.volatile_statuses = PokemonVolatileStatusSet::from_iter(defending_volatile_status);
 
                     choice.move_id = move_name;
                     choice.category = MoveCategory::Physical;

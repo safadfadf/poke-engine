@@ -18,8 +18,8 @@ use crate::instruction::{
     ChangeVolatileStatusDurationInstruction, ChangeWeather, DecrementRestTurnsInstruction,
     DecrementWishInstruction, HealInstruction, RemoveVolatileStatusInstruction,
     SetSecondMoveSwitchOutMoveInstruction, SetSleepTurnsInstruction, ToggleBatonPassingInstruction,
-    ToggleDamageDealtHitSubstituteInstruction, ToggleShedTailingInstruction,
-    ToggleTrickRoomInstruction,
+    ToggleDamageDealtHitSubstituteInstruction, ToggleMegaEvolvedInstruction,
+    ToggleShedTailingInstruction, ToggleTrickRoomInstruction,
 };
 use crate::instruction::{ChangeAbilityInstruction, ToggleTerastallizedInstruction};
 use crate::instruction::{DecrementFutureSightInstruction, FormeChangeInstruction};
@@ -35,6 +35,7 @@ use super::state::{MoveChoice, PokemonVolatileStatus, Terrain, Weather};
 use crate::choices::{Choice, MoveCategory};
 use crate::instruction::{
     ChangeStatusInstruction, DamageInstruction, Instruction, StateInstructions, SwitchInstruction,
+    TeamPreviewInstruction,
 };
 use crate::state::{
     LastUsedMove, PokemonBoostableStat, PokemonIndex, PokemonMoveIndex, PokemonSideCondition,
@@ -54,14 +55,11 @@ pub const BASE_CRIT_CHANCE: f32 = 1.0 / 24.0;
 #[cfg(any(feature = "gen3", feature = "gen4"))]
 pub const MAX_SLEEP_TURNS: i8 = 4;
 
-#[cfg(any(
-    feature = "gen5",
-    feature = "gen6",
-    feature = "gen7",
-    feature = "gen8",
-    feature = "gen9"
-))]
+#[cfg(any(feature = "gen5", feature = "gen6", feature = "gen7", feature = "gen8"))]
 pub const MAX_SLEEP_TURNS: i8 = 3;
+
+#[cfg(feature = "gen9")]
+pub const MAX_SLEEP_TURNS: i8 = 2;
 
 #[cfg(any(feature = "gen7", feature = "gen8", feature = "gen9"))]
 pub const HIT_SELF_IN_CONFUSION_CHANCE: f32 = 1.0 / 3.0;
@@ -93,12 +91,53 @@ const PROTECT_VOLATILES: [PokemonVolatileStatus; 6] = [
     PokemonVolatileStatus::ENDURE,
 ];
 
+#[cfg(any(
+    feature = "gen3",
+    feature = "gen4",
+    feature = "gen5",
+    feature = "gen6",
+    feature = "gen7",
+    feature = "gen8"
+))]
 fn chance_to_wake_up(turns_asleep: i8) -> f32 {
     if turns_asleep == 0 {
         0.0
     } else {
         1.0 / (1 + MAX_SLEEP_TURNS - turns_asleep) as f32
     }
+}
+
+#[cfg(feature = "gen9")]
+fn chance_to_wake_up(turns_asleep: i8) -> f32 {
+    match turns_asleep {
+        0 => 0.0,
+        1 => 1.0 / 3.0,
+        _ => 1.0,
+    }
+}
+
+#[cfg(feature = "gen9")]
+fn chance_to_thaw(freeze_turns: i8) -> f32 {
+    if freeze_turns >= 2 {
+        1.0
+    } else {
+        0.25
+    }
+}
+
+#[cfg(not(feature = "gen9"))]
+fn chance_to_thaw(_freeze_turns: i8) -> f32 {
+    0.20
+}
+
+#[cfg(feature = "gen9")]
+fn chance_to_be_fully_paralyzed() -> f32 {
+    0.125
+}
+
+#[cfg(not(feature = "gen9"))]
+fn chance_to_be_fully_paralyzed() -> f32 {
+    0.25
 }
 
 fn set_last_used_move_as_switch(
@@ -664,6 +703,19 @@ pub fn add_remove_status_instructions(
                 pkmn.sleep_turns = 0;
             }
         }
+        PokemonStatus::FREEZE => {
+            if pkmn.freeze_turns != 0 {
+                incoming_instructions
+                    .instruction_list
+                    .push(Instruction::SetFreezeTurns(SetSleepTurnsInstruction {
+                        side_ref: side_reference,
+                        pokemon_index,
+                        new_turns: 0,
+                        previous_turns: pkmn.freeze_turns,
+                    }));
+                pkmn.freeze_turns = 0;
+            }
+        }
         PokemonStatus::TOXIC => {
             if side.side_conditions.toxic_count != 0 {
                 incoming_instructions
@@ -803,6 +855,17 @@ fn get_instructions_from_status_effects(
         })
     } else {
         let old_status = target_pkmn.status;
+        if status.status == PokemonStatus::FREEZE && target_pkmn.freeze_turns != 0 {
+            incoming_instructions
+                .instruction_list
+                .push(Instruction::SetFreezeTurns(SetSleepTurnsInstruction {
+                    side_ref: target_side_ref,
+                    pokemon_index: target_side_active,
+                    new_turns: 0,
+                    previous_turns: target_pkmn.freeze_turns,
+                }));
+            target_pkmn.freeze_turns = 0;
+        }
         target_pkmn.status = status.status;
         Instruction::ChangeStatus(ChangeStatusInstruction {
             side_ref: target_side_ref,
@@ -959,6 +1022,151 @@ fn compare_health_with_damage_multiples(max_damage: i16, health: i16) -> (i16, i
     }
 
     (total_less_than / num_less_than, num_greater_than)
+}
+
+fn multi_hit_count_branches(
+    state: &State,
+    attacking_side: &SideReference,
+    choice: &Choice,
+) -> Vec<(i8, f32)> {
+    match choice.multi_hit() {
+        MultiHitMove::None => vec![(1, 1.0)],
+        MultiHitMove::DoubleHit => vec![(2, 1.0)],
+        MultiHitMove::TripleHit => vec![(3, 1.0)],
+        MultiHitMove::TwoToFiveHits => {
+            let attacker = state
+                .get_side_immutable(attacking_side)
+                .get_active_immutable();
+            if attacker.ability == Abilities::SKILLLINK {
+                vec![(5, 1.0)]
+            } else if attacker.item == Items::LOADEDDICE {
+                vec![(4, 0.5), (5, 0.5)]
+            } else {
+                vec![(2, 0.35), (3, 0.35), (4, 0.15), (5, 0.15)]
+            }
+        }
+        MultiHitMove::PopulationBomb => {
+            let attacker = state
+                .get_side_immutable(attacking_side)
+                .get_active_immutable();
+            if attacker.ability == Abilities::SKILLLINK {
+                return vec![(10, 1.0)];
+            }
+            let p = multi_accuracy_continue_probability(state, attacking_side, choice);
+            if attacker.item == Items::LOADEDDICE {
+                let mut branches = Vec::new();
+                for target_hits in 4..=10 {
+                    for (hits, probability) in multi_accuracy_hit_count_branches(target_hits, p) {
+                        add_hit_count_probability(&mut branches, hits, probability / 7.0);
+                    }
+                }
+                return branches
+                    .into_iter()
+                    .filter(|(_, probability)| *probability > 0.0)
+                    .collect();
+            }
+            // Population Bomb checks accuracy for each hit.  The move-hit check above
+            // already accounts for the first hit, so these probabilities are
+            // conditional on the first hit connecting.
+            multi_accuracy_hit_count_branches(10, p)
+        }
+        MultiHitMove::TripleAxel => {
+            let attacker = state
+                .get_side_immutable(attacking_side)
+                .get_active_immutable();
+            if attacker.ability == Abilities::SKILLLINK {
+                return vec![(3, 1.0)];
+            }
+            // Triple Axel checks accuracy for each hit.  The move-hit check above
+            // already accounts for the first hit, so these probabilities are
+            // conditional on the first hit connecting.
+            let p = multi_accuracy_continue_probability(state, attacking_side, choice);
+            multi_accuracy_hit_count_branches(3, p)
+        }
+    }
+}
+
+fn multi_accuracy_hit_count_branches(target_hits: i8, continue_probability: f32) -> Vec<(i8, f32)> {
+    let mut branches = Vec::with_capacity(target_hits.max(1) as usize);
+    let mut previous_hits_connected = 1.0;
+    for hits in 1..target_hits {
+        branches.push((hits, previous_hits_connected * (1.0 - continue_probability)));
+        previous_hits_connected *= continue_probability;
+    }
+    branches.push((target_hits, previous_hits_connected));
+    branches
+        .into_iter()
+        .filter(|(_, probability)| *probability > 0.0)
+        .collect()
+}
+
+fn add_hit_count_probability(branches: &mut Vec<(i8, f32)>, hits: i8, probability: f32) {
+    if let Some((_, existing_probability)) = branches
+        .iter_mut()
+        .find(|(existing_hits, _)| *existing_hits == hits)
+    {
+        *existing_probability += probability;
+    } else {
+        branches.push((hits, probability));
+    }
+}
+
+fn multi_accuracy_continue_probability(
+    state: &State,
+    attacking_side: &SideReference,
+    choice: &Choice,
+) -> f32 {
+    let attacking_side_state = state.get_side_immutable(attacking_side);
+    ((choice.accuracy / 100.0) * boosted_accuracy(attacking_side_state.accuracy_boost)).min(1.0)
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum HitDamageMode {
+    Fixed,
+    Average,
+    CritAverage,
+}
+
+fn variable_power_multihit_multiplier(choice: &Choice, hit_number: i8) -> Option<f32> {
+    match choice.move_id {
+        Choices::TRIPLEAXEL => match hit_number {
+            1..=3 => Some(hit_number as f32),
+            _ => None,
+        },
+        Choices::TRIPLEKICK => match hit_number {
+            1..=3 => Some(hit_number as f32),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+fn damage_amount_for_hit(
+    state: &State,
+    attacking_side: &SideReference,
+    choice: &Choice,
+    hit_number: i8,
+    fallback_damage_amount: i16,
+    damage_mode: HitDamageMode,
+) -> i16 {
+    if damage_mode == HitDamageMode::Fixed {
+        return fallback_damage_amount;
+    }
+
+    let Some(multiplier) = variable_power_multihit_multiplier(choice, hit_number) else {
+        return fallback_damage_amount;
+    };
+
+    let mut hit_choice = choice.clone();
+    hit_choice.base_power *= multiplier;
+    match calculate_damage(state, attacking_side, &hit_choice, DamageRolls::Average) {
+        Some((damage, crit_damage)) => match damage_mode {
+            HitDamageMode::Average => damage,
+            HitDamageMode::CritAverage => crit_damage,
+            HitDamageMode::Fixed => fallback_damage_amount,
+        },
+        None => fallback_damage_amount,
+    }
 }
 
 fn get_instructions_from_secondaries(
@@ -1643,9 +1851,13 @@ fn before_move(
             .contains(&PokemonVolatileStatus::SILKTRAP))
         && choice.flags.protect
     {
-        choice.remove_effects_for_protect();
-        if choice.crash.is_some() {
-            choice.accuracy = 0.0;
+        if choice.bypasses_protect {
+            choice.protected_damage_multiplier = choice.protect_bypass_damage_multiplier;
+        } else {
+            choice.remove_effects_for_protect();
+            if choice.crash.is_some() {
+                choice.accuracy = 0.0;
+            }
         }
 
         if defending_side
@@ -1707,21 +1919,35 @@ fn generate_instructions_from_existing_status_conditions(
     let attacker_active = attacking_side.get_active();
     match attacker_active.status {
         PokemonStatus::PARALYZE => {
+            let full_paralysis_chance = chance_to_be_fully_paralyzed();
             // Fully-Paralyzed Branch
             let mut fully_paralyzed_instruction = incoming_instructions.clone();
-            fully_paralyzed_instruction.update_percentage(0.25);
+            fully_paralyzed_instruction.update_percentage(full_paralysis_chance);
             final_instructions.push(fully_paralyzed_instruction);
 
             // Non-Paralyzed Branch
-            incoming_instructions.update_percentage(0.75);
+            incoming_instructions.update_percentage(1.0 - full_paralysis_chance);
         }
         PokemonStatus::FREEZE => {
-            let mut still_frozen_instruction = incoming_instructions.clone();
-            still_frozen_instruction.update_percentage(0.80);
-            final_instructions.push(still_frozen_instruction);
+            let current_freeze_turns = attacker_active.freeze_turns;
+            let chance_to_thaw = chance_to_thaw(current_freeze_turns);
+            if chance_to_thaw < 1.0 {
+                let mut still_frozen_instruction = incoming_instructions.clone();
+                still_frozen_instruction.update_percentage(1.0 - chance_to_thaw);
+                still_frozen_instruction
+                    .instruction_list
+                    .push(Instruction::SetFreezeTurns(SetSleepTurnsInstruction {
+                        side_ref: *attacking_side_ref,
+                        pokemon_index: current_active_index,
+                        new_turns: current_freeze_turns + 1,
+                        previous_turns: current_freeze_turns,
+                    }));
+                final_instructions.push(still_frozen_instruction);
+            }
 
-            incoming_instructions.update_percentage(0.20);
+            incoming_instructions.update_percentage(chance_to_thaw);
             attacker_active.status = PokemonStatus::NONE;
+            attacker_active.freeze_turns = 0;
             incoming_instructions
                 .instruction_list
                 .push(Instruction::ChangeStatus(ChangeStatusInstruction {
@@ -1729,6 +1955,14 @@ fn generate_instructions_from_existing_status_conditions(
                     pokemon_index: current_active_index,
                     old_status: PokemonStatus::FREEZE,
                     new_status: PokemonStatus::NONE,
+                }));
+            incoming_instructions
+                .instruction_list
+                .push(Instruction::SetFreezeTurns(SetSleepTurnsInstruction {
+                    side_ref: *attacking_side_ref,
+                    pokemon_index: current_active_index,
+                    new_turns: 0,
+                    previous_turns: current_freeze_turns,
                 }));
         }
         PokemonStatus::SLEEP => {
@@ -2282,48 +2516,20 @@ pub fn generate_instructions_from_move(
         return;
     }
 
-    // start multi-hit
-    let hit_count;
-    match choice.multi_hit() {
-        MultiHitMove::None => {
-            hit_count = 1;
-        }
-        MultiHitMove::DoubleHit => {
-            hit_count = 2;
-        }
-        MultiHitMove::TripleHit => {
-            hit_count = 3;
-        }
-        MultiHitMove::TwoToFiveHits => {
-            hit_count =
-                if state.get_side(&attacking_side).get_active().ability == Abilities::SKILLLINK {
-                    5
-                } else if state.get_side(&attacking_side).get_active().item == Items::LOADEDDICE {
-                    4
-                } else {
-                    3 // too lazy to implement branching here. Average is 3.2 so this is a fine approximation
-                };
-        }
-        MultiHitMove::PopulationBomb => {
-            // population bomb checks accuracy each time but lets approximate
-            hit_count = if state.get_side(&attacking_side).get_active().item == Items::WIDELENS {
-                9
-            } else {
-                6
-            };
-        }
-        MultiHitMove::TripleAxel => {
-            // triple axel checks accuracy each time but until multi-accuracy is implemented this
-            // is the best we can do
-            hit_count = 3
-        }
-    }
+    let hit_count_branches = multi_hit_count_branches(state, &attacking_side, &choice);
 
     let (_attacker_side, defender_side) = state.get_both_sides(&attacking_side);
     let defender_active = defender_side.get_active();
     let mut does_damage = false;
     let (mut branch_damage, mut regular_damage) = (0, 0);
     let mut branch_instructions: Option<StateInstructions> = None;
+    let variable_power_damage = variable_power_multihit_multiplier(choice, 1).is_some();
+    let mut regular_damage_mode = if variable_power_damage {
+        HitDamageMode::Average
+    } else {
+        HitDamageMode::Fixed
+    };
+    let mut branch_damage_mode = HitDamageMode::Fixed;
     if let Some((max_damage_dealt, max_crit_damage)) = damage {
         does_damage = true;
         let avg_damage_dealt = (max_damage_dealt as f32 * 0.925) as i16;
@@ -2357,6 +2563,7 @@ pub fn generate_instructions_from_move(
 
             incoming_instructions.update_percentage(1.0 - branch_chance);
             regular_damage = average_non_kill_damage;
+            regular_damage_mode = HitDamageMode::Fixed;
         } else if branch_on_damage && max_damage_dealt < defender_active.hp {
             let crit_rate = if defender_active.ability == Abilities::BATTLEARMOR
                 || defender_active.ability == Abilities::SHELLARMOR
@@ -2375,19 +2582,23 @@ pub fn generate_instructions_from_move(
             branch_damage = (max_crit_damage as f32 * 0.925) as i16;
             incoming_instructions.update_percentage(1.0 - crit_rate);
             regular_damage = (max_damage_dealt as f32 * 0.925) as i16;
+            if variable_power_damage {
+                branch_damage_mode = HitDamageMode::CritAverage;
+            }
         } else {
             regular_damage = avg_damage_dealt;
         }
     }
 
     if incoming_instructions.percentage != 0.0 {
-        run_move(
+        run_move_hit_count_branches(
             state,
             attacking_side,
             incoming_instructions,
-            hit_count,
+            &hit_count_branches,
             does_damage,
             regular_damage,
+            regular_damage_mode,
             choice,
             defender_choice,
             &mut final_instructions,
@@ -2400,13 +2611,14 @@ pub fn generate_instructions_from_move(
     if let Some(branch_ins) = branch_instructions {
         if branch_ins.percentage != 0.0 {
             state.apply_instructions(&branch_ins.instruction_list);
-            run_move(
+            run_move_hit_count_branches(
                 state,
                 attacking_side,
                 branch_ins,
-                hit_count,
+                &hit_count_branches,
                 does_damage,
                 branch_damage,
+                branch_damage_mode,
                 choice,
                 defender_choice,
                 &mut final_instructions,
@@ -3523,17 +3735,26 @@ fn run_move(
     hit_count: i8,
     does_damage: bool,
     damage_amount: i16,
+    damage_mode: HitDamageMode,
     choice: &mut Choice,
     defender_choice: &Choice,
     final_instructions: &mut Vec<StateInstructions>,
 ) {
     let mut hit_sub = false;
-    for _ in 0..hit_count {
+    for hit_number in 1..=hit_count {
         if does_damage {
+            let hit_damage_amount = damage_amount_for_hit(
+                state,
+                &attacking_side,
+                choice,
+                hit_number,
+                damage_amount,
+                damage_mode,
+            );
             hit_sub = generate_instructions_from_damage(
                 state,
                 choice,
-                damage_amount,
+                hit_damage_amount,
                 &attacking_side,
                 &mut instructions,
             );
@@ -3728,6 +3949,54 @@ fn run_move(
     }
 }
 
+fn run_move_hit_count_branches(
+    state: &mut State,
+    attacking_side: SideReference,
+    instructions: StateInstructions,
+    hit_count_branches: &[(i8, f32)],
+    does_damage: bool,
+    damage_amount: i16,
+    damage_mode: HitDamageMode,
+    choice: &Choice,
+    defender_choice: &Choice,
+    final_instructions: &mut Vec<StateInstructions>,
+) {
+    let mut ran_branch = false;
+    for (hit_count, probability) in hit_count_branches {
+        if *hit_count <= 0 || *probability <= 0.0 {
+            continue;
+        }
+        let mut branch_instructions = instructions.clone();
+        branch_instructions.update_percentage(*probability);
+        if branch_instructions.percentage == 0.0 {
+            continue;
+        }
+
+        if ran_branch {
+            state.apply_instructions(&branch_instructions.instruction_list);
+        }
+
+        let mut branch_choice = choice.clone();
+        run_move(
+            state,
+            attacking_side,
+            branch_instructions,
+            *hit_count,
+            does_damage,
+            damage_amount,
+            damage_mode,
+            &mut branch_choice,
+            defender_choice,
+            final_instructions,
+        );
+        ran_branch = true;
+    }
+
+    if !ran_branch {
+        state.reverse_instructions(&instructions.instruction_list);
+    }
+}
+
 fn after_move_finish(state: &mut State, final_instructions: &mut Vec<StateInstructions>) {
     for state_instructions in final_instructions.iter_mut() {
         state.apply_instructions(&state_instructions.instruction_list);
@@ -3795,7 +4064,15 @@ fn handle_both_moves(
 }
 
 fn mega_evolve(state: &mut State, side_ref: SideReference, instructions: &mut StateInstructions) {
+    {
+        let side = state.get_side_immutable(&side_ref);
+        if side.mega_used || side.pokemon.into_iter().any(|p| p.mega_evolved) {
+            return;
+        }
+    }
+
     let side = state.get_side(&side_ref);
+    let active_index = side.active_index;
     let active_pkmn = side.get_active();
 
     // assumes that you can mega-evolve if this function is called
@@ -3831,6 +4108,15 @@ fn mega_evolve(state: &mut State, side_ref: SideReference, instructions: &mut St
             }));
         active_pkmn.ability = mega_evolve_data.ability;
     }
+    if mega_evolve_data.ability != active_pkmn.base_ability {
+        instructions
+            .instruction_list
+            .push(Instruction::ChangeBaseAbility(ChangeAbilityInstruction {
+                side_ref,
+                ability_change: mega_evolve_data.ability as i16 - active_pkmn.base_ability as i16,
+            }));
+        active_pkmn.base_ability = mega_evolve_data.ability;
+    }
     // change type
     if mega_evolve_data.types != active_pkmn.types {
         instructions
@@ -3843,8 +4129,19 @@ fn mega_evolve(state: &mut State, side_ref: SideReference, instructions: &mut St
         active_pkmn.types = mega_evolve_data.types;
     }
 
+    instructions
+        .instruction_list
+        .push(Instruction::ToggleMegaEvolved(
+            ToggleMegaEvolvedInstruction {
+                side_ref,
+                pokemon_index: active_index,
+            },
+        ));
+    state.get_side(&side_ref).get_active().mega_evolved = true;
+
     // ability on switch in
     ability_on_switch_in(state, &side_ref, instructions);
+    state.get_side(&side_ref).mega_used = true;
 }
 
 pub fn generate_instructions_from_move_pair(
@@ -3853,6 +4150,39 @@ pub fn generate_instructions_from_move_pair(
     side_two_move: &MoveChoice,
     branch_on_damage: bool,
 ) -> Vec<StateInstructions> {
+    if state.team_preview {
+        let mut instructions = StateInstructions::default();
+        if let MoveChoice::TeamPreview(lead_index, reserve_index_one, reserve_index_two) =
+            side_one_move
+        {
+            instructions
+                .instruction_list
+                .push(Instruction::TeamPreview(TeamPreviewInstruction {
+                    side_ref: SideReference::SideOne,
+                    previous_active_index: state.side_one.active_index,
+                    previous_pokemon: state.side_one.serialize(),
+                    lead_index: *lead_index,
+                    reserve_index_one: *reserve_index_one,
+                    reserve_index_two: *reserve_index_two,
+                }));
+        }
+        if let MoveChoice::TeamPreview(lead_index, reserve_index_one, reserve_index_two) =
+            side_two_move
+        {
+            instructions
+                .instruction_list
+                .push(Instruction::TeamPreview(TeamPreviewInstruction {
+                    side_ref: SideReference::SideTwo,
+                    previous_active_index: state.side_two.active_index,
+                    previous_pokemon: state.side_two.serialize(),
+                    lead_index: *lead_index,
+                    reserve_index_one: *reserve_index_one,
+                    reserve_index_two: *reserve_index_two,
+                }));
+        }
+        return vec![instructions];
+    }
+
     let mut side_one_choice;
     let mut s1_tera = false;
     let mut s1_mega = false;
@@ -3879,6 +4209,9 @@ pub fn generate_instructions_from_move_pair(
             side_one_choice = state.side_one.get_active().moves[move_index].choice.clone();
             side_one_choice.move_index = *move_index;
             s1_mega = true;
+        }
+        MoveChoice::TeamPreview(_, _, _) => {
+            unreachable!("team preview handled before move parsing")
         }
         MoveChoice::None => {
             side_one_choice = Choice::default();
@@ -3911,6 +4244,9 @@ pub fn generate_instructions_from_move_pair(
             side_two_choice = state.side_two.get_active().moves[move_index].choice.clone();
             side_two_choice.move_index = *move_index;
             s2_mega = true;
+        }
+        MoveChoice::TeamPreview(_, _, _) => {
+            unreachable!("team preview handled before move parsing")
         }
         MoveChoice::None => {
             side_two_choice = Choice::default();
@@ -4065,11 +4401,13 @@ pub fn generate_instructions_from_move_pair(
     state_instructions_vec
 }
 
-pub fn calculate_damage_rolls(
+fn calculate_damage_rolls_with_mode(
     mut state: State,
     attacking_side_ref: &SideReference,
     mut choice: Choice,
     mut defending_choice: &Choice,
+    damage_rolls: DamageRolls,
+    hit_number: i8,
 ) -> Option<Vec<i16>> {
     let mut incoming_instructions = StateInstructions::default();
 
@@ -4150,9 +4488,13 @@ pub fn calculate_damage_rolls(
         choice = MOVES.get(&Choices::FUTURESIGHT)?.clone();
     }
 
+    if let Some(multiplier) = variable_power_multihit_multiplier(&choice, hit_number) {
+        choice.base_power *= multiplier;
+    }
+
     let mut return_vec = Vec::with_capacity(4);
     if let Some((damage, crit_damage)) =
-        calculate_damage(&state, attacking_side_ref, &choice, DamageRolls::Max)
+        calculate_damage(&state, attacking_side_ref, &choice, damage_rolls)
     {
         return_vec.push(damage);
         return_vec.push(crit_damage);
@@ -4160,6 +4502,54 @@ pub fn calculate_damage_rolls(
     } else {
         None
     }
+}
+
+pub fn calculate_damage_rolls(
+    state: State,
+    attacking_side_ref: &SideReference,
+    choice: Choice,
+    defending_choice: &Choice,
+) -> Option<Vec<i16>> {
+    calculate_damage_rolls_with_mode(
+        state,
+        attacking_side_ref,
+        choice,
+        defending_choice,
+        DamageRolls::Max,
+        1,
+    )
+}
+
+pub fn calculate_single_hit_damage_rolls(
+    state: State,
+    attacking_side_ref: &SideReference,
+    choice: Choice,
+    defending_choice: &Choice,
+) -> Option<Vec<i16>> {
+    calculate_single_hit_damage_rolls_for_hit(
+        state,
+        attacking_side_ref,
+        choice,
+        defending_choice,
+        1,
+    )
+}
+
+pub fn calculate_single_hit_damage_rolls_for_hit(
+    state: State,
+    attacking_side_ref: &SideReference,
+    choice: Choice,
+    defending_choice: &Choice,
+    hit_number: i8,
+) -> Option<Vec<i16>> {
+    calculate_damage_rolls_with_mode(
+        state,
+        attacking_side_ref,
+        choice,
+        defending_choice,
+        DamageRolls::Max,
+        hit_number,
+    )
 }
 
 pub fn calculate_both_damage_rolls(
@@ -4192,12 +4582,385 @@ pub fn calculate_both_damage_rolls(
     (damages_dealt_s1, damages_dealt_s2)
 }
 
+pub fn calculate_both_single_hit_damage_rolls(
+    state: &State,
+    s1_choice: Choice,
+    s2_choice: Choice,
+    side_one_moves_first: bool,
+) -> (Option<Vec<i16>>, Option<Vec<i16>>) {
+    calculate_both_single_hit_damage_rolls_for_hits(
+        state,
+        s1_choice,
+        s2_choice,
+        side_one_moves_first,
+        1,
+        1,
+    )
+}
+
+pub fn calculate_both_single_hit_damage_rolls_for_hits(
+    state: &State,
+    mut s1_choice: Choice,
+    mut s2_choice: Choice,
+    side_one_moves_first: bool,
+    side_one_hit_number: i8,
+    side_two_hit_number: i8,
+) -> (Option<Vec<i16>>, Option<Vec<i16>>) {
+    if side_one_moves_first {
+        s1_choice.first_move = true;
+        s2_choice.first_move = false;
+    } else {
+        s1_choice.first_move = false;
+        s2_choice.first_move = true;
+    }
+
+    let damages_dealt_s1 = calculate_single_hit_damage_rolls_for_hit(
+        state.clone(),
+        &SideReference::SideOne,
+        s1_choice.clone(),
+        &s2_choice,
+        side_one_hit_number,
+    );
+    let damages_dealt_s2 = calculate_single_hit_damage_rolls_for_hit(
+        state.clone(),
+        &SideReference::SideTwo,
+        s2_choice,
+        &s1_choice,
+        side_two_hit_number,
+    );
+
+    (damages_dealt_s1, damages_dealt_s2)
+}
+
+fn choice_from_move_choice(
+    state: &State,
+    side_ref: SideReference,
+    move_choice: &MoveChoice,
+) -> Option<Choice> {
+    let side = state.get_side_immutable(&side_ref);
+    match move_choice {
+        MoveChoice::Move(move_index)
+        | MoveChoice::MoveTera(move_index)
+        | MoveChoice::MoveMega(move_index) => {
+            let mut choice = side.get_active_immutable().moves[move_index].choice.clone();
+            choice.move_index = *move_index;
+            Some(choice)
+        }
+        MoveChoice::Switch(switch_id) => {
+            let mut choice = Choice::default();
+            choice.switch_id = *switch_id;
+            choice.category = MoveCategory::Switch;
+            Some(choice)
+        }
+        MoveChoice::TeamPreview(_, _, _) => None,
+        MoveChoice::None => None,
+    }
+}
+
+pub fn calculate_both_damage_rolls_with_choices(
+    state: &State,
+    side_one_move: &MoveChoice,
+    side_two_move: &MoveChoice,
+    side_one_moves_first: bool,
+) -> (Option<Vec<i16>>, Option<Vec<i16>>) {
+    let mut working_state = state.clone();
+
+    if matches!(side_one_move, MoveChoice::MoveTera(_)) {
+        working_state.side_one.get_active().terastallized = true;
+    }
+    if matches!(side_two_move, MoveChoice::MoveTera(_)) {
+        working_state.side_two.get_active().terastallized = true;
+    }
+    if matches!(side_one_move, MoveChoice::MoveMega(_)) {
+        let mut mega_instructions = StateInstructions::default();
+        mega_evolve(
+            &mut working_state,
+            SideReference::SideOne,
+            &mut mega_instructions,
+        );
+    }
+    if matches!(side_two_move, MoveChoice::MoveMega(_)) {
+        let mut mega_instructions = StateInstructions::default();
+        mega_evolve(
+            &mut working_state,
+            SideReference::SideTwo,
+            &mut mega_instructions,
+        );
+    }
+
+    let mut s1_choice =
+        match choice_from_move_choice(&working_state, SideReference::SideOne, side_one_move) {
+            Some(choice) => choice,
+            None => return (None, None),
+        };
+    let mut s2_choice =
+        match choice_from_move_choice(&working_state, SideReference::SideTwo, side_two_move) {
+            Some(choice) => choice,
+            None => return (None, None),
+        };
+
+    if side_one_moves_first {
+        s1_choice.first_move = true;
+        s2_choice.first_move = false;
+    } else {
+        s1_choice.first_move = false;
+        s2_choice.first_move = true;
+    }
+
+    let damages_dealt_s1 = if s1_choice.category == MoveCategory::Switch {
+        None
+    } else {
+        calculate_damage_rolls(
+            working_state.clone(),
+            &SideReference::SideOne,
+            s1_choice.clone(),
+            &s2_choice,
+        )
+    };
+    let damages_dealt_s2 = if s2_choice.category == MoveCategory::Switch {
+        None
+    } else {
+        calculate_damage_rolls(
+            working_state,
+            &SideReference::SideTwo,
+            s2_choice,
+            &s1_choice,
+        )
+    };
+
+    (damages_dealt_s1, damages_dealt_s2)
+}
+
+fn calculate_damage_roll_ranges_with_choice(
+    state: State,
+    attacking_side_ref: &SideReference,
+    mut choice: Choice,
+    mut defending_choice: Choice,
+) -> (Option<Vec<i16>>, Option<Vec<i16>>) {
+    if choice.move_id == Choices::FUTURESIGHT {
+        return (Some(vec![0, 0]), Some(vec![0, 0]));
+    }
+
+    let mut incoming_instructions = StateInstructions::default();
+
+    match choice.move_id {
+        Choices::FINALGAMBIT => {
+            let attacker_active = state
+                .get_side_immutable(attacking_side_ref)
+                .get_active_immutable();
+            let defender_active = state
+                .get_side_immutable(&attacking_side_ref.get_other_side())
+                .get_active_immutable();
+            if type_effectiveness_modifier(&PokemonType::NORMAL, defender_active) == 0.0 {
+                return (None, None);
+            }
+            let dmg = cmp::min(attacker_active.hp, defender_active.hp);
+            return (Some(vec![dmg, dmg]), Some(vec![dmg, dmg]));
+        }
+        Choices::ENDEAVOR => {
+            let attacker_active = state
+                .get_side_immutable(attacking_side_ref)
+                .get_active_immutable();
+            let defender_active = state
+                .get_side_immutable(&attacking_side_ref.get_other_side())
+                .get_active_immutable();
+            if type_effectiveness_modifier(&PokemonType::NORMAL, defender_active) == 0.0
+                || attacker_active.hp >= defender_active.hp
+            {
+                return (None, None);
+            }
+            let dmg = defender_active.hp - attacker_active.hp;
+            return (Some(vec![dmg, dmg]), Some(vec![dmg, dmg]));
+        }
+        Choices::PAINSPLIT => {
+            let attacker_active = state
+                .get_side_immutable(attacking_side_ref)
+                .get_active_immutable();
+            let defender_active = state
+                .get_side_immutable(&attacking_side_ref.get_other_side())
+                .get_active_immutable();
+            let dmg = defender_active.hp - (attacker_active.hp + defender_active.hp) / 2;
+            return (Some(vec![dmg, dmg]), Some(vec![dmg, dmg]));
+        }
+        Choices::SUPERFANG
+            if type_effectiveness_modifier(
+                &PokemonType::NORMAL,
+                state
+                    .get_side_immutable(&attacking_side_ref.get_other_side())
+                    .get_active_immutable(),
+            ) == 0.0 =>
+        {
+            return (None, None);
+        }
+        Choices::SUPERFANG | Choices::NATURESMADNESS | Choices::RUINATION => {
+            let defender_active = state
+                .get_side_immutable(&attacking_side_ref.get_other_side())
+                .get_active_immutable();
+            let dmg = defender_active.hp / 2;
+            return (Some(vec![dmg, dmg]), Some(vec![dmg, dmg]));
+        }
+        Choices::SUCKERPUNCH | Choices::THUNDERCLAP => {
+            defending_choice = MOVES.get(&Choices::TACKLE).unwrap().clone();
+        }
+        _ => {}
+    }
+
+    before_move(
+        &mut state.clone(),
+        &mut choice,
+        &defending_choice,
+        attacking_side_ref,
+        &mut incoming_instructions,
+    );
+
+    if choice.move_id == Choices::FUTURESIGHT {
+        choice = MOVES.get(&Choices::FUTURESIGHT).unwrap().clone();
+    }
+
+    let min_damage = calculate_damage(&state, attacking_side_ref, &choice, DamageRolls::Min)
+        .map(|(damage, crit_damage)| vec![damage, crit_damage]);
+    let max_damage = calculate_damage(&state, attacking_side_ref, &choice, DamageRolls::Max)
+        .map(|(damage, crit_damage)| vec![damage, crit_damage]);
+
+    (min_damage, max_damage)
+}
+
+pub fn calculate_both_damage_roll_ranges_with_choices(
+    state: &State,
+    side_one_move: &MoveChoice,
+    side_two_move: &MoveChoice,
+    side_one_moves_first: bool,
+) -> (
+    (Option<Vec<i16>>, Option<Vec<i16>>),
+    (Option<Vec<i16>>, Option<Vec<i16>>),
+) {
+    let mut working_state = state.clone();
+
+    if matches!(side_one_move, MoveChoice::MoveTera(_)) {
+        working_state.side_one.get_active().terastallized = true;
+    }
+    if matches!(side_two_move, MoveChoice::MoveTera(_)) {
+        working_state.side_two.get_active().terastallized = true;
+    }
+    if matches!(side_one_move, MoveChoice::MoveMega(_)) {
+        let mut mega_instructions = StateInstructions::default();
+        mega_evolve(
+            &mut working_state,
+            SideReference::SideOne,
+            &mut mega_instructions,
+        );
+    }
+    if matches!(side_two_move, MoveChoice::MoveMega(_)) {
+        let mut mega_instructions = StateInstructions::default();
+        mega_evolve(
+            &mut working_state,
+            SideReference::SideTwo,
+            &mut mega_instructions,
+        );
+    }
+
+    let mut s1_choice =
+        match choice_from_move_choice(&working_state, SideReference::SideOne, side_one_move) {
+            Some(choice) => choice,
+            None => return ((None, None), (None, None)),
+        };
+    let mut s2_choice =
+        match choice_from_move_choice(&working_state, SideReference::SideTwo, side_two_move) {
+            Some(choice) => choice,
+            None => return ((None, None), (None, None)),
+        };
+
+    if side_one_moves_first {
+        s1_choice.first_move = true;
+        s2_choice.first_move = false;
+    } else {
+        s1_choice.first_move = false;
+        s2_choice.first_move = true;
+    }
+
+    let s1_ranges = if s1_choice.category == MoveCategory::Switch {
+        (None, None)
+    } else {
+        calculate_damage_roll_ranges_with_choice(
+            working_state.clone(),
+            &SideReference::SideOne,
+            s1_choice.clone(),
+            s2_choice.clone(),
+        )
+    };
+    let s2_ranges = if s2_choice.category == MoveCategory::Switch {
+        (None, None)
+    } else {
+        calculate_damage_roll_ranges_with_choice(
+            working_state,
+            &SideReference::SideTwo,
+            s2_choice,
+            s1_choice,
+        )
+    };
+
+    (s1_ranges, s2_ranges)
+}
+
+pub fn calculate_both_damage_roll_ranges(
+    state: &State,
+    mut s1_choice: Choice,
+    mut s2_choice: Choice,
+    side_one_moves_first: bool,
+) -> (
+    (Option<Vec<i16>>, Option<Vec<i16>>),
+    (Option<Vec<i16>>, Option<Vec<i16>>),
+) {
+    if side_one_moves_first {
+        s1_choice.first_move = true;
+        s2_choice.first_move = false;
+    } else {
+        s1_choice.first_move = false;
+        s2_choice.first_move = true;
+    }
+
+    let s1_min = calculate_damage_rolls_with_mode(
+        state.clone(),
+        &SideReference::SideOne,
+        s1_choice.clone(),
+        &s2_choice,
+        DamageRolls::Min,
+        1,
+    );
+    let s1_max = calculate_damage_rolls_with_mode(
+        state.clone(),
+        &SideReference::SideOne,
+        s1_choice.clone(),
+        &s2_choice,
+        DamageRolls::Max,
+        1,
+    );
+    let s2_min = calculate_damage_rolls_with_mode(
+        state.clone(),
+        &SideReference::SideTwo,
+        s2_choice.clone(),
+        &s1_choice,
+        DamageRolls::Min,
+        1,
+    );
+    let s2_max = calculate_damage_rolls_with_mode(
+        state.clone(),
+        &SideReference::SideTwo,
+        s2_choice,
+        &s1_choice,
+        DamageRolls::Max,
+        1,
+    );
+
+    ((s1_min, s1_max), (s2_min, s2_max))
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::abilities::Abilities;
     use super::super::state::{PokemonVolatileStatus, Terrain, Weather};
     use super::*;
-    use crate::choices::{Choices, MOVES};
+    use crate::choices::{Choice, Choices, MOVES};
     use crate::instruction::{
         ApplyVolatileStatusInstruction, BoostInstruction, ChangeItemInstruction,
         ChangeStatusInstruction, ChangeSubsituteHealthInstruction, ChangeTerrain,
@@ -5403,6 +6166,58 @@ mod tests {
         ];
 
         assert_eq!(instructions, expected_instructions)
+    }
+
+    #[test]
+    #[cfg(feature = "gen9")]
+    fn test_piercing_drill_only_reduces_damage_through_protect() {
+        let mut state = State::default();
+        state.side_one.get_active().ability = Abilities::PIERCINGDRILL;
+        let mut choice = MOVES.get(&Choices::TACKLE).unwrap().to_owned();
+        let defender_choice = Choice::default();
+        let mut incoming_instructions = StateInstructions::default();
+
+        let base_damage =
+            calculate_damage(&state, &SideReference::SideOne, &choice, DamageRolls::Max)
+                .unwrap()
+                .0;
+        before_move(
+            &mut state,
+            &mut choice,
+            &defender_choice,
+            &SideReference::SideOne,
+            &mut incoming_instructions,
+        );
+        let piercing_drill_damage =
+            calculate_damage(&state, &SideReference::SideOne, &choice, DamageRolls::Max)
+                .unwrap()
+                .0;
+
+        assert_eq!(base_damage, piercing_drill_damage);
+
+        state
+            .side_two
+            .volatile_statuses
+            .insert(PokemonVolatileStatus::PROTECT);
+        let mut protected_choice = MOVES.get(&Choices::TACKLE).unwrap().to_owned();
+        let mut protected_instructions = StateInstructions::default();
+        before_move(
+            &mut state,
+            &mut protected_choice,
+            &defender_choice,
+            &SideReference::SideOne,
+            &mut protected_instructions,
+        );
+        let protected_damage = calculate_damage(
+            &state,
+            &SideReference::SideOne,
+            &protected_choice,
+            DamageRolls::Max,
+        )
+        .unwrap()
+        .0;
+
+        assert_eq!((base_damage as f32 * 0.25) as i16, protected_damage);
     }
 
     #[test]
@@ -8389,13 +9204,14 @@ mod tests {
         state.side_one.get_active().status = PokemonStatus::PARALYZE;
         let mut incoming_instructions = StateInstructions::default();
 
+        let full_paralysis_chance = chance_to_be_fully_paralyzed();
         let expected_instructions = StateInstructions {
-            percentage: 75.0,
+            percentage: 100.0 * (1.0 - full_paralysis_chance),
             instruction_list: vec![],
         };
 
         let expected_frozen_instructions = &mut vec![StateInstructions {
-            percentage: 25.0,
+            percentage: 100.0 * full_paralysis_chance,
             instruction_list: vec![],
         }];
 
@@ -8553,20 +9369,34 @@ mod tests {
         let mut state = State::default();
         state.side_one.get_active().status = PokemonStatus::FREEZE;
         let mut incoming_instructions = StateInstructions::default();
+        let thaw_chance = chance_to_thaw(0);
 
         let expected_instructions = StateInstructions {
-            percentage: 20.0,
-            instruction_list: vec![Instruction::ChangeStatus(ChangeStatusInstruction {
-                side_ref: SideReference::SideOne,
-                pokemon_index: state.side_one.active_index,
-                old_status: PokemonStatus::FREEZE,
-                new_status: PokemonStatus::NONE,
-            })],
+            percentage: 100.0 * thaw_chance,
+            instruction_list: vec![
+                Instruction::ChangeStatus(ChangeStatusInstruction {
+                    side_ref: SideReference::SideOne,
+                    pokemon_index: state.side_one.active_index,
+                    old_status: PokemonStatus::FREEZE,
+                    new_status: PokemonStatus::NONE,
+                }),
+                Instruction::SetFreezeTurns(SetSleepTurnsInstruction {
+                    side_ref: SideReference::SideOne,
+                    pokemon_index: PokemonIndex::P0,
+                    new_turns: 0,
+                    previous_turns: 0,
+                }),
+            ],
         };
 
         let expected_frozen_instructions = &mut vec![StateInstructions {
-            percentage: 80.0,
-            instruction_list: vec![],
+            percentage: 100.0 * (1.0 - thaw_chance),
+            instruction_list: vec![Instruction::SetFreezeTurns(SetSleepTurnsInstruction {
+                side_ref: SideReference::SideOne,
+                pokemon_index: PokemonIndex::P0,
+                new_turns: 1,
+                previous_turns: 0,
+            })],
         }];
 
         let frozen_instructions = &mut vec![];
@@ -8773,8 +9603,9 @@ mod tests {
             damage_amount: 1,
         })];
 
+        let full_paralysis_chance = chance_to_be_fully_paralyzed();
         let expected_instructions = StateInstructions {
-            percentage: 75.0,
+            percentage: 100.0 * (1.0 - full_paralysis_chance),
             instruction_list: vec![Instruction::Damage(DamageInstruction {
                 side_ref: SideReference::SideOne,
                 damage_amount: 1,
@@ -8782,7 +9613,7 @@ mod tests {
         };
 
         let expected_frozen_instructions = &mut vec![StateInstructions {
-            percentage: 25.0,
+            percentage: 100.0 * full_paralysis_chance,
             instruction_list: vec![Instruction::Damage(DamageInstruction {
                 side_ref: SideReference::SideOne,
                 damage_amount: 1,
@@ -10334,5 +11165,31 @@ mod tests {
     #[cfg(any(feature = "gen4"))]
     fn test_gen4_100_percent_to_wake_after_4_sleep_turn() {
         assert_eq!(1.0, chance_to_wake_up(4));
+    }
+
+    #[test]
+    #[cfg(feature = "gen9")]
+    fn test_gen9_33_percent_to_wake_after_1_sleep_turn() {
+        assert_eq!(1.0 / 3.0, chance_to_wake_up(1));
+    }
+
+    #[test]
+    #[cfg(feature = "gen9")]
+    fn test_gen9_100_percent_to_wake_after_2_sleep_turns() {
+        assert_eq!(1.0, chance_to_wake_up(2));
+    }
+
+    #[test]
+    #[cfg(feature = "gen9")]
+    fn test_gen9_12_5_percent_full_paralysis_chance() {
+        assert_eq!(0.125, chance_to_be_fully_paralyzed());
+    }
+
+    #[test]
+    #[cfg(feature = "gen9")]
+    fn test_gen9_freeze_thaws_on_third_turn() {
+        assert_eq!(0.25, chance_to_thaw(0));
+        assert_eq!(0.25, chance_to_thaw(1));
+        assert_eq!(1.0, chance_to_thaw(2));
     }
 }

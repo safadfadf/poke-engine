@@ -171,7 +171,7 @@ class Pokemon:
     :type item: str
     :param nature: Nature
     :type nature: str
-    :param evs: Effort values
+    :param evs: Champions stat points, each 0..32 with total <=66
     :type evs: tuple[int, int, int, int, int, int]
     :param attack: Attack stat
     :type attack: int
@@ -189,6 +189,8 @@ class Pokemon:
     :type rest_turns: int
     :param sleep_turns: Turns spent asleep. Increments from 0.
     :type sleep_turns: int
+    :param freeze_turns: Turns spent frozen. Increments from 0.
+    :type freeze_turns: int
     :param weight_kg: Weight in kilograms
     :type weight_kg: float
     :param terastallized: if the Pokemon is terastallized
@@ -222,6 +224,7 @@ class Pokemon:
     status: str
     rest_turns: int
     sleep_turns: int
+    freeze_turns: int
     weight_kg: float
     terastallized: bool
     tera_type: str
@@ -241,7 +244,7 @@ class Pokemon:
         base_ability: str = "",
         item: str = "none",
         nature: str = "serious",
-        evs: Tuple[int, int, int, int, int, int] = (85, 85, 85, 85, 85, 85),
+        evs: Tuple[int, int, int, int, int, int] = (11, 11, 11, 11, 11, 11),
         attack: int = 100,
         defense: int = 100,
         special_attack: int = 100,
@@ -250,6 +253,7 @@ class Pokemon:
         status: str = "none",
         rest_turns: int = 0,
         sleep_turns: int = 0,
+        freeze_turns: int = 0,
         weight_kg: float = 0.0,
         moves: Optional[List[Move]] = None,
         terastallized: bool = False,
@@ -459,7 +463,7 @@ def calculate_damage(
     side_one_move: str,
     side_two_move: str,
     side_one_moves_first: bool,
-) -> List[int]:
+) -> Tuple[List[int], List[int]]:
     """
     Calculate damage rolls for a move.
 
@@ -468,5 +472,36 @@ def calculate_damage(
     :param side_two_move: The move used for side_two
     :param side_one_moves_first: if side_one moves first
     :return: List of damage values
+    """
+    ...
+
+def calculate_single_hit_damage(
+    py_state: State,
+    side_one_move: str,
+    side_two_move: str,
+    side_one_moves_first: bool,
+) -> Tuple[List[int], List[int]]:
+    """
+    Calculate single-hit damage rolls for a move.
+
+    Multi-hit moves return the per-hit damage roll, not total damage across all hits.
+    """
+    ...
+
+def calculate_damage_range(
+    py_state: State,
+    side_one_move: str,
+    side_two_move: str,
+    side_one_moves_first: bool,
+) -> Tuple[Tuple[int, int, int, int], Tuple[int, int, int, int]]:
+    """
+    Calculate min/max normal and crit damage for both sides.
+
+    :param py_state: The current game state
+    :param side_one_move: The move used for side_one
+    :param side_two_move: The move used for side_two
+    :param side_one_moves_first: if side_one moves first
+    :return: ((side_one_min_normal, side_one_max_normal, side_one_min_crit, side_one_max_crit),
+              (side_two_min_normal, side_two_max_normal, side_two_min_crit, side_two_max_crit))
     """
     ...

@@ -1,8 +1,9 @@
 #![cfg(not(any(feature = "gen1", feature = "gen2", feature = "gen3")))]
 
-use poke_engine::choices::{Choices, MoveCategory, MOVES};
+use poke_engine::choices::{Choice, Choices, MoveCategory, MOVES};
 use poke_engine::engine::abilities::{Abilities, WEATHER_ABILITY_TURNS};
-use poke_engine::engine::damage_calc::CRIT_MULTIPLIER;
+use poke_engine::engine::choice_effects::modify_choice;
+use poke_engine::engine::damage_calc::{calculate_damage, DamageRolls, CRIT_MULTIPLIER};
 use poke_engine::engine::generate_instructions::{
     generate_instructions_from_move_pair, BASE_CRIT_CHANCE, CONSECUTIVE_PROTECT_CHANCE,
     MAX_SLEEP_TURNS,
@@ -5893,6 +5894,299 @@ fn test_weatherball_in_sun() {
 }
 
 #[test]
+fn test_mega_sol_weatherball_uses_sun_without_setting_weather() {
+    let state = State::default();
+    let mut choice = MOVES.get(&Choices::WEATHERBALL).unwrap().to_owned();
+    let defender_choice = Choice::default();
+    let mut mega_sol_state = state.clone();
+    mega_sol_state.side_one.get_active().ability = Abilities::MEGASOL;
+
+    modify_choice(
+        &mega_sol_state,
+        &mut choice,
+        &defender_choice,
+        &SideReference::SideOne,
+    );
+
+    assert_eq!(PokemonType::FIRE, choice.move_type);
+    assert_eq!(100.0, choice.base_power);
+    assert_eq!(Weather::NONE, mega_sol_state.weather.weather_type);
+}
+
+#[test]
+fn test_mega_sol_weatherball_is_suppressed_by_neutralizing_gas() {
+    let defender_choice = Choice::default();
+    let mut choice = MOVES.get(&Choices::WEATHERBALL).unwrap().to_owned();
+    let mut state = State::default();
+    state.side_one.get_active().ability = Abilities::MEGASOL;
+    state.side_two.get_active().ability = Abilities::NEUTRALIZINGGAS;
+
+    modify_choice(
+        &state,
+        &mut choice,
+        &defender_choice,
+        &SideReference::SideOne,
+    );
+
+    assert_eq!(PokemonType::NORMAL, choice.move_type);
+    assert_eq!(50.0, choice.base_power);
+}
+
+#[test]
+fn test_mega_sol_weatherball_is_suppressed_by_weather_suppressing_abilities() {
+    for ability in [Abilities::CLOUDNINE, Abilities::AIRLOCK] {
+        let defender_choice = Choice::default();
+        let mut choice = MOVES.get(&Choices::WEATHERBALL).unwrap().to_owned();
+        let mut state = State::default();
+        state.side_one.get_active().ability = Abilities::MEGASOL;
+        state.side_two.get_active().ability = ability;
+
+        modify_choice(
+            &state,
+            &mut choice,
+            &defender_choice,
+            &SideReference::SideOne,
+        );
+
+        assert_eq!(PokemonType::NORMAL, choice.move_type);
+        assert_eq!(50.0, choice.base_power);
+    }
+}
+
+#[test]
+fn test_mega_sol_solarbeam_does_not_charge_without_weather() {
+    let state = State::default();
+    let defender_choice = Choice::default();
+    let mut normal_choice = MOVES.get(&Choices::SOLARBEAM).unwrap().to_owned();
+    let mut mega_sol_choice = MOVES.get(&Choices::SOLARBEAM).unwrap().to_owned();
+    let mut mega_sol_state = state.clone();
+    mega_sol_state.side_one.get_active().ability = Abilities::MEGASOL;
+
+    modify_choice(
+        &state,
+        &mut normal_choice,
+        &defender_choice,
+        &SideReference::SideOne,
+    );
+    modify_choice(
+        &mega_sol_state,
+        &mut mega_sol_choice,
+        &defender_choice,
+        &SideReference::SideOne,
+    );
+
+    assert!(normal_choice.flags.charge);
+    assert!(!mega_sol_choice.flags.charge);
+}
+
+#[test]
+fn test_mega_sol_damage_uses_regular_sun_not_harsh_sun() {
+    let mut sun_state = State::default();
+    let mut harsh_sun_state = State::default();
+    let mut mega_sol_state = State::default();
+    let choice = MOVES.get(&Choices::WATERGUN).unwrap().to_owned();
+
+    sun_state.weather.weather_type = Weather::SUN;
+    harsh_sun_state.weather.weather_type = Weather::HARSHSUN;
+    mega_sol_state.side_one.get_active().ability = Abilities::MEGASOL;
+
+    let sun_damage = calculate_damage(
+        &sun_state,
+        &SideReference::SideOne,
+        &choice,
+        DamageRolls::Max,
+    )
+    .unwrap()
+    .0;
+    let harsh_sun_damage = calculate_damage(
+        &harsh_sun_state,
+        &SideReference::SideOne,
+        &choice,
+        DamageRolls::Max,
+    )
+    .unwrap()
+    .0;
+    let mega_sol_damage = calculate_damage(
+        &mega_sol_state,
+        &SideReference::SideOne,
+        &choice,
+        DamageRolls::Max,
+    )
+    .unwrap()
+    .0;
+
+    assert_eq!(0, harsh_sun_damage);
+    assert_eq!(sun_damage, mega_sol_damage);
+}
+
+#[test]
+fn test_mega_sol_damage_weather_is_suppressed_by_neutralizing_gas() {
+    let normal_state = State::default();
+    let mut mega_sol_state = State::default();
+    let choice = MOVES.get(&Choices::EMBER).unwrap().to_owned();
+    mega_sol_state.side_one.get_active().ability = Abilities::MEGASOL;
+
+    let normal_damage = calculate_damage(
+        &normal_state,
+        &SideReference::SideOne,
+        &choice,
+        DamageRolls::Max,
+    )
+    .unwrap()
+    .0;
+    let mega_sol_damage = calculate_damage(
+        &mega_sol_state,
+        &SideReference::SideOne,
+        &choice,
+        DamageRolls::Max,
+    )
+    .unwrap()
+    .0;
+
+    mega_sol_state.side_two.get_active().ability = Abilities::NEUTRALIZINGGAS;
+    let suppressed_damage = calculate_damage(
+        &mega_sol_state,
+        &SideReference::SideOne,
+        &choice,
+        DamageRolls::Max,
+    )
+    .unwrap()
+    .0;
+
+    assert!(mega_sol_damage > normal_damage);
+    assert_eq!(normal_damage, suppressed_damage);
+}
+
+#[test]
+fn test_dragonize_changes_normal_moves_to_dragon_and_boosts_power() {
+    let mut state = State::default();
+    state.side_one.get_active().ability = Abilities::DRAGONIZE;
+    let mut choice = MOVES.get(&Choices::TACKLE).unwrap().to_owned();
+    let defender_choice = Choice::default();
+
+    poke_engine::engine::abilities::ability_modify_attack_being_used(
+        &state,
+        &mut choice,
+        &defender_choice,
+        &SideReference::SideOne,
+    );
+
+    assert_eq!(PokemonType::DRAGON, choice.move_type);
+    assert_eq!(48.0, choice.base_power);
+}
+
+#[test]
+fn test_piercing_drill_contact_moves_bypass_protect_for_quarter_damage() {
+    let mut state = State::default();
+    state.side_one.get_active().ability = Abilities::PIERCINGDRILL;
+
+    let vec_of_instructions = set_moves_on_pkmn_and_call_generate_instructions(
+        &mut state,
+        Choices::TACKLE,
+        Choices::PROTECT,
+    );
+
+    let expected_instructions = vec![StateInstructions {
+        percentage: 100.0,
+        instruction_list: vec![
+            Instruction::ApplyVolatileStatus(ApplyVolatileStatusInstruction {
+                side_ref: SideReference::SideTwo,
+                volatile_status: PokemonVolatileStatus::PROTECT,
+            }),
+            Instruction::Damage(DamageInstruction {
+                side_ref: SideReference::SideTwo,
+                damage_amount: 12,
+            }),
+            Instruction::RemoveVolatileStatus(RemoveVolatileStatusInstruction {
+                side_ref: SideReference::SideTwo,
+                volatile_status: PokemonVolatileStatus::PROTECT,
+            }),
+            Instruction::ChangeSideCondition(ChangeSideConditionInstruction {
+                side_ref: SideReference::SideTwo,
+                side_condition: PokemonSideCondition::Protect,
+                amount: 1,
+            }),
+        ],
+    }];
+    assert_eq!(expected_instructions, vec_of_instructions);
+}
+
+#[test]
+fn test_spicy_spray_burns_attacker_after_damage() {
+    let mut state = State::default();
+    state.side_two.get_active().ability = Abilities::SPICYSPRAY;
+    let mut choice = MOVES.get(&Choices::TACKLE).unwrap().to_owned();
+    let mut instructions = StateInstructions::default();
+
+    poke_engine::engine::abilities::ability_after_damage_hit(
+        &mut state,
+        &mut choice,
+        &SideReference::SideOne,
+        1,
+        &mut instructions,
+    );
+
+    assert_eq!(PokemonStatus::BURN, state.side_one.get_active().status);
+    assert_eq!(
+        vec![Instruction::ChangeStatus(ChangeStatusInstruction {
+            side_ref: SideReference::SideOne,
+            pokemon_index: PokemonIndex::P0,
+            old_status: PokemonStatus::NONE,
+            new_status: PokemonStatus::BURN,
+        })],
+        instructions.instruction_list
+    );
+}
+
+#[test]
+fn test_spicy_spray_lum_berry_cures_burn() {
+    let mut state = State::default();
+    state.side_one.get_active().item = Items::LUMBERRY;
+    state.side_two.get_active().ability = Abilities::SPICYSPRAY;
+    let mut choice = MOVES.get(&Choices::TACKLE).unwrap().to_owned();
+    let mut instructions = StateInstructions::default();
+
+    poke_engine::engine::abilities::ability_after_damage_hit(
+        &mut state,
+        &mut choice,
+        &SideReference::SideOne,
+        1,
+        &mut instructions,
+    );
+
+    assert_eq!(PokemonStatus::NONE, state.side_one.get_active().status);
+    assert_eq!(Items::NONE, state.side_one.get_active().item);
+    assert_eq!(
+        vec![Instruction::ChangeItem(ChangeItemInstruction {
+            side_ref: SideReference::SideOne,
+            current_item: Items::LUMBERRY,
+            new_item: Items::NONE,
+        })],
+        instructions.instruction_list
+    );
+}
+
+#[test]
+fn test_spicy_spray_is_suppressed_by_neutralizing_gas() {
+    let mut state = State::default();
+    state.side_one.get_active().ability = Abilities::NEUTRALIZINGGAS;
+    state.side_two.get_active().ability = Abilities::SPICYSPRAY;
+    let mut choice = MOVES.get(&Choices::TACKLE).unwrap().to_owned();
+    let mut instructions = StateInstructions::default();
+
+    poke_engine::engine::abilities::ability_after_damage_hit(
+        &mut state,
+        &mut choice,
+        &SideReference::SideOne,
+        1,
+        &mut instructions,
+    );
+
+    assert_eq!(PokemonStatus::NONE, state.side_one.get_active().status);
+    assert!(instructions.instruction_list.is_empty());
+}
+
+#[test]
 #[cfg(any(feature = "gen9"))]
 fn test_terrainpulse_gen9() {
     let mut state = State::default();
@@ -8041,6 +8335,24 @@ fn test_mega_evolve_options_side_one() {
         ],
         side_two_moves
     );
+}
+
+#[test]
+#[cfg(not(feature = "terastallization"))]
+fn test_champions_mega_evolve_options_side_one() {
+    let mut state = State::default();
+    state.side_one.get_active().id = PokemonName::MEGANIUM;
+    state.side_one.get_active().item = Items::MEGANIUMITE;
+    state.side_one.pokemon[PokemonIndex::P1].id = PokemonName::GRENINJA;
+    state.side_one.pokemon[PokemonIndex::P1].item = Items::GRENINJITE;
+
+    let (side_one_moves, _side_two_moves) = state.get_all_options();
+
+    assert!(side_one_moves.contains(&MoveChoice::MoveMega(PokemonMoveIndex::M0)));
+    assert!(side_one_moves.contains(&MoveChoice::MoveMega(PokemonMoveIndex::M1)));
+    assert!(side_one_moves.contains(&MoveChoice::MoveMega(PokemonMoveIndex::M2)));
+    assert!(side_one_moves.contains(&MoveChoice::MoveMega(PokemonMoveIndex::M3)));
+    assert!(state.side_one.pokemon[PokemonIndex::P1].can_mega_evolve());
 }
 
 #[test]
@@ -15440,11 +15752,69 @@ fn test_population_bomb_with_widelens() {
 
     let expected_instructions = vec![
         StateInstructions {
-            percentage: 10.000002,
+            percentage: 0.99999905,
             instruction_list: vec![],
         },
         StateInstructions {
-            percentage: 90.0,
+            percentage: 0.98999906,
+            instruction_list: vec![Instruction::Damage(DamageInstruction {
+                side_ref: SideReference::SideTwo,
+                damage_amount: 24,
+            })],
+        },
+        StateInstructions {
+            percentage: 0.9800991,
+            instruction_list: vec![
+                Instruction::Damage(DamageInstruction {
+                    side_ref: SideReference::SideTwo,
+                    damage_amount: 24,
+                }),
+                Instruction::Damage(DamageInstruction {
+                    side_ref: SideReference::SideTwo,
+                    damage_amount: 24,
+                }),
+            ],
+        },
+        StateInstructions {
+            percentage: 0.9702981,
+            instruction_list: vec![
+                Instruction::Damage(DamageInstruction {
+                    side_ref: SideReference::SideTwo,
+                    damage_amount: 24,
+                }),
+                Instruction::Damage(DamageInstruction {
+                    side_ref: SideReference::SideTwo,
+                    damage_amount: 24,
+                }),
+                Instruction::Damage(DamageInstruction {
+                    side_ref: SideReference::SideTwo,
+                    damage_amount: 24,
+                }),
+            ],
+        },
+        StateInstructions {
+            percentage: 0.9605952,
+            instruction_list: vec![
+                Instruction::Damage(DamageInstruction {
+                    side_ref: SideReference::SideTwo,
+                    damage_amount: 24,
+                }),
+                Instruction::Damage(DamageInstruction {
+                    side_ref: SideReference::SideTwo,
+                    damage_amount: 24,
+                }),
+                Instruction::Damage(DamageInstruction {
+                    side_ref: SideReference::SideTwo,
+                    damage_amount: 24,
+                }),
+                Instruction::Damage(DamageInstruction {
+                    side_ref: SideReference::SideTwo,
+                    damage_amount: 24,
+                }),
+            ],
+        },
+        StateInstructions {
+            percentage: 95.099014,
             instruction_list: vec![
                 Instruction::Damage(DamageInstruction {
                     side_ref: SideReference::SideTwo,
@@ -15470,6 +15840,244 @@ fn test_population_bomb_with_widelens() {
         },
     ];
     assert_eq!(expected_instructions, vec_of_instructions);
+}
+
+#[test]
+#[cfg(feature = "gen9")]
+fn test_loaded_dice_branches_two_to_five_hits_as_four_or_five() {
+    let mut state = State::default();
+    state.side_one.get_active().item = Items::LOADEDDICE;
+
+    let vec_of_instructions = set_moves_on_pkmn_and_call_generate_instructions(
+        &mut state,
+        Choices::SCALESHOT,
+        Choices::SPLASH,
+    );
+
+    let expected_instructions = vec![
+        StateInstructions {
+            percentage: 10.000002,
+            instruction_list: vec![],
+        },
+        StateInstructions {
+            percentage: 45.0,
+            instruction_list: vec![
+                Instruction::Damage(DamageInstruction {
+                    side_ref: SideReference::SideTwo,
+                    damage_amount: 21,
+                }),
+                Instruction::Damage(DamageInstruction {
+                    side_ref: SideReference::SideTwo,
+                    damage_amount: 21,
+                }),
+                Instruction::Damage(DamageInstruction {
+                    side_ref: SideReference::SideTwo,
+                    damage_amount: 21,
+                }),
+                Instruction::Damage(DamageInstruction {
+                    side_ref: SideReference::SideTwo,
+                    damage_amount: 21,
+                }),
+                Instruction::Boost(BoostInstruction {
+                    side_ref: SideReference::SideOne,
+                    stat: PokemonBoostableStat::Defense,
+                    amount: -1,
+                }),
+                Instruction::Boost(BoostInstruction {
+                    side_ref: SideReference::SideOne,
+                    stat: PokemonBoostableStat::Speed,
+                    amount: 1,
+                }),
+            ],
+        },
+        StateInstructions {
+            percentage: 45.0,
+            instruction_list: vec![
+                Instruction::Damage(DamageInstruction {
+                    side_ref: SideReference::SideTwo,
+                    damage_amount: 21,
+                }),
+                Instruction::Damage(DamageInstruction {
+                    side_ref: SideReference::SideTwo,
+                    damage_amount: 21,
+                }),
+                Instruction::Damage(DamageInstruction {
+                    side_ref: SideReference::SideTwo,
+                    damage_amount: 21,
+                }),
+                Instruction::Damage(DamageInstruction {
+                    side_ref: SideReference::SideTwo,
+                    damage_amount: 21,
+                }),
+                Instruction::Damage(DamageInstruction {
+                    side_ref: SideReference::SideTwo,
+                    damage_amount: 16,
+                }),
+                Instruction::Boost(BoostInstruction {
+                    side_ref: SideReference::SideOne,
+                    stat: PokemonBoostableStat::Defense,
+                    amount: -1,
+                }),
+                Instruction::Boost(BoostInstruction {
+                    side_ref: SideReference::SideOne,
+                    stat: PokemonBoostableStat::Speed,
+                    amount: 1,
+                }),
+            ],
+        },
+    ];
+    assert_eq!(expected_instructions, vec_of_instructions);
+}
+
+fn damage_hit_branch_percentages(instructions: &[StateInstructions]) -> Vec<(usize, f32)> {
+    instructions
+        .iter()
+        .map(|branch| {
+            let damage_hits = branch
+                .instruction_list
+                .iter()
+                .filter(|instruction| matches!(instruction, Instruction::Damage(_)))
+                .count();
+            (damage_hits, branch.percentage)
+        })
+        .collect()
+}
+
+fn damage_amounts_for_branch_with_hits(
+    instructions: &[StateInstructions],
+    hit_count: usize,
+) -> Vec<i16> {
+    instructions
+        .iter()
+        .find_map(|branch| {
+            let damage_amounts = branch
+                .instruction_list
+                .iter()
+                .filter_map(|instruction| match instruction {
+                    Instruction::Damage(DamageInstruction {
+                        side_ref: SideReference::SideTwo,
+                        damage_amount,
+                    }) => Some(*damage_amount),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            if damage_amounts.len() == hit_count {
+                Some(damage_amounts)
+            } else {
+                None
+            }
+        })
+        .unwrap()
+}
+
+fn assert_branch_percentages_close(actual: &[(usize, f32)], expected: &[(usize, f32)]) {
+    assert_eq!(actual.len(), expected.len());
+    for ((actual_hits, actual_percentage), (expected_hits, expected_percentage)) in
+        actual.iter().zip(expected.iter())
+    {
+        assert_eq!(actual_hits, expected_hits);
+        assert!(
+            (actual_percentage - expected_percentage).abs() < 0.001,
+            "expected {} hits to have percentage {}, got {}",
+            expected_hits,
+            expected_percentage,
+            actual_percentage
+        );
+    }
+}
+
+#[test]
+#[cfg(feature = "gen9")]
+fn test_triple_axel_uses_increasing_damage_per_hit() {
+    let mut state = State::default();
+    state.side_two.get_active().hp = 500;
+    state.side_two.get_active().maxhp = 500;
+
+    let vec_of_instructions = set_moves_on_pkmn_and_call_generate_instructions(
+        &mut state,
+        Choices::TRIPLEAXEL,
+        Choices::SPLASH,
+    );
+
+    let damage_amounts = damage_amounts_for_branch_with_hits(&vec_of_instructions, 3);
+    assert!(
+        damage_amounts[0] < damage_amounts[1] && damage_amounts[1] < damage_amounts[2],
+        "expected Triple Axel damage to increase per hit, got {:?}",
+        damage_amounts
+    );
+}
+
+#[test]
+#[cfg(feature = "gen9")]
+fn test_triple_kick_uses_increasing_damage_per_hit() {
+    let mut state = State::default();
+    state.side_two.get_active().hp = 500;
+    state.side_two.get_active().maxhp = 500;
+
+    let vec_of_instructions = set_moves_on_pkmn_and_call_generate_instructions(
+        &mut state,
+        Choices::TRIPLEKICK,
+        Choices::SPLASH,
+    );
+
+    let damage_amounts = damage_amounts_for_branch_with_hits(&vec_of_instructions, 3);
+    assert!(
+        damage_amounts[0] < damage_amounts[1] && damage_amounts[1] < damage_amounts[2],
+        "expected Triple Kick damage to increase per hit, got {:?}",
+        damage_amounts
+    );
+}
+
+#[test]
+#[cfg(feature = "gen9")]
+fn test_loaded_dice_population_bomb_still_checks_later_accuracy() {
+    let mut state = State::default();
+    state.side_one.get_active().item = Items::LOADEDDICE;
+    state.side_two.get_active().hp = 500;
+    state.side_two.get_active().maxhp = 500;
+
+    let vec_of_instructions = set_moves_on_pkmn_and_call_generate_instructions(
+        &mut state,
+        Choices::POPULATIONBOMB,
+        Choices::SPLASH,
+    );
+
+    assert_branch_percentages_close(
+        &damage_hit_branch_percentages(&vec_of_instructions),
+        &[
+            (0, 10.000002),
+            (1, 9.0),
+            (2, 8.099999),
+            (3, 7.289999),
+            (4, 14.996571),
+            (5, 12.653357),
+            (6, 10.62882),
+            (7, 8.882655),
+            (8, 7.379437),
+            (9, 6.088036),
+            (10, 4.981121),
+        ],
+    );
+}
+
+#[test]
+#[cfg(feature = "gen9")]
+fn test_loaded_dice_does_not_force_triple_axel_to_three_hits() {
+    let mut state = State::default();
+    state.side_one.get_active().item = Items::LOADEDDICE;
+    state.side_two.get_active().hp = 500;
+    state.side_two.get_active().maxhp = 500;
+
+    let vec_of_instructions = set_moves_on_pkmn_and_call_generate_instructions(
+        &mut state,
+        Choices::TRIPLEAXEL,
+        Choices::SPLASH,
+    );
+
+    assert_branch_percentages_close(
+        &damage_hit_branch_percentages(&vec_of_instructions),
+        &[(0, 10.000002), (1, 9.0), (2, 8.099999), (3, 72.9)],
+    );
 }
 
 #[test]
@@ -15532,7 +16140,30 @@ fn test_scaleshot_only_boosts_once() {
             instruction_list: vec![],
         },
         StateInstructions {
-            percentage: 90.0,
+            percentage: 31.5,
+            instruction_list: vec![
+                Instruction::Damage(DamageInstruction {
+                    side_ref: SideReference::SideTwo,
+                    damage_amount: 21,
+                }),
+                Instruction::Damage(DamageInstruction {
+                    side_ref: SideReference::SideTwo,
+                    damage_amount: 21,
+                }),
+                Instruction::Boost(BoostInstruction {
+                    side_ref: SideReference::SideOne,
+                    stat: PokemonBoostableStat::Defense,
+                    amount: -1,
+                }),
+                Instruction::Boost(BoostInstruction {
+                    side_ref: SideReference::SideOne,
+                    stat: PokemonBoostableStat::Speed,
+                    amount: 1,
+                }),
+            ],
+        },
+        StateInstructions {
+            percentage: 31.5,
             instruction_list: vec![
                 Instruction::Damage(DamageInstruction {
                     side_ref: SideReference::SideTwo,
@@ -15545,6 +16176,72 @@ fn test_scaleshot_only_boosts_once() {
                 Instruction::Damage(DamageInstruction {
                     side_ref: SideReference::SideTwo,
                     damage_amount: 21,
+                }),
+                Instruction::Boost(BoostInstruction {
+                    side_ref: SideReference::SideOne,
+                    stat: PokemonBoostableStat::Defense,
+                    amount: -1,
+                }),
+                Instruction::Boost(BoostInstruction {
+                    side_ref: SideReference::SideOne,
+                    stat: PokemonBoostableStat::Speed,
+                    amount: 1,
+                }),
+            ],
+        },
+        StateInstructions {
+            percentage: 13.500001,
+            instruction_list: vec![
+                Instruction::Damage(DamageInstruction {
+                    side_ref: SideReference::SideTwo,
+                    damage_amount: 21,
+                }),
+                Instruction::Damage(DamageInstruction {
+                    side_ref: SideReference::SideTwo,
+                    damage_amount: 21,
+                }),
+                Instruction::Damage(DamageInstruction {
+                    side_ref: SideReference::SideTwo,
+                    damage_amount: 21,
+                }),
+                Instruction::Damage(DamageInstruction {
+                    side_ref: SideReference::SideTwo,
+                    damage_amount: 21,
+                }),
+                Instruction::Boost(BoostInstruction {
+                    side_ref: SideReference::SideOne,
+                    stat: PokemonBoostableStat::Defense,
+                    amount: -1,
+                }),
+                Instruction::Boost(BoostInstruction {
+                    side_ref: SideReference::SideOne,
+                    stat: PokemonBoostableStat::Speed,
+                    amount: 1,
+                }),
+            ],
+        },
+        StateInstructions {
+            percentage: 13.500001,
+            instruction_list: vec![
+                Instruction::Damage(DamageInstruction {
+                    side_ref: SideReference::SideTwo,
+                    damage_amount: 21,
+                }),
+                Instruction::Damage(DamageInstruction {
+                    side_ref: SideReference::SideTwo,
+                    damage_amount: 21,
+                }),
+                Instruction::Damage(DamageInstruction {
+                    side_ref: SideReference::SideTwo,
+                    damage_amount: 21,
+                }),
+                Instruction::Damage(DamageInstruction {
+                    side_ref: SideReference::SideTwo,
+                    damage_amount: 21,
+                }),
+                Instruction::Damage(DamageInstruction {
+                    side_ref: SideReference::SideTwo,
+                    damage_amount: 16,
                 }),
                 Instruction::Boost(BoostInstruction {
                     side_ref: SideReference::SideOne,

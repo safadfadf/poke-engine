@@ -6,7 +6,9 @@ use std::collections::HashSet;
 use poke_engine::choices::{Choices, MoveCategory, MOVES};
 use poke_engine::engine::abilities::Abilities;
 use poke_engine::engine::generate_instructions::{
-    calculate_both_damage_rolls, generate_instructions_from_move_pair,
+    calculate_both_damage_roll_ranges, calculate_both_damage_roll_ranges_with_choices,
+    calculate_both_damage_rolls, calculate_both_damage_rolls_with_choices,
+    calculate_both_single_hit_damage_rolls_for_hits, generate_instructions_from_move_pair,
 };
 use poke_engine::engine::items::Items;
 use poke_engine::engine::state::{MoveChoice, PokemonVolatileStatus, Terrain, Weather};
@@ -15,9 +17,9 @@ use poke_engine::mcts::{perform_mcts, MctsResult, MctsSideResult};
 use poke_engine::pokemon::PokemonName;
 use poke_engine::search::iterative_deepen_expectiminimax;
 use poke_engine::state::{
-    LastUsedMove, Move, Pokemon, PokemonIndex, PokemonMoves, PokemonNature, PokemonStatus,
-    PokemonType, Side, SideConditions, SidePokemon, State, StateTerrain, StateTrickRoom,
-    StateWeather, VolatileStatusDurations,
+    validate_champions_evs, LastUsedMove, Move, Pokemon, PokemonIndex, PokemonMoves, PokemonNature,
+    PokemonStatus, PokemonType, PokemonVolatileStatusSet, Side, SideConditions, SidePokemon, State,
+    StateTerrain, StateTrickRoom, StateWeather, VolatileStatusDurations,
 };
 use std::str::FromStr;
 use std::time::Duration;
@@ -162,6 +164,7 @@ pub struct PySide {
     force_switch: bool,
     force_trapped: bool,
     slow_uturn_move: bool,
+    mega_used: bool,
     volatile_statuses: HashSet<String>,
     substitute_health: i16,
     attack_boost: i8,
@@ -192,6 +195,7 @@ impl From<Side> for PySide {
             force_switch: other.force_switch,
             force_trapped: other.force_trapped,
             slow_uturn_move: other.slow_uturn_move,
+            mega_used: other.mega_used,
             volatile_statuses: other
                 .volatile_statuses
                 .iter()
@@ -239,11 +243,12 @@ impl Into<Side> for PySide {
             force_switch: self.force_switch,
             force_trapped: self.force_trapped,
             slow_uturn_move: self.slow_uturn_move,
+            mega_used: self.mega_used,
             volatile_statuses: self
                 .volatile_statuses
                 .iter()
                 .map(|s| PokemonVolatileStatus::from_str(s))
-                .collect::<Result<HashSet<_>, _>>()
+                .collect::<Result<PokemonVolatileStatusSet, _>>()
                 .unwrap(),
             substitute_health: self.substitute_health,
             attack_boost: self.attack_boost,
@@ -278,6 +283,7 @@ impl PySide {
         force_switch=false,
         force_trapped=false,
         slow_uturn_move=false,
+        mega_used=false,
         volatile_statuses=HashSet::<String>::new(),
         substitute_health=0,
         attack_boost=0,
@@ -303,6 +309,7 @@ impl PySide {
         force_switch: bool,
         force_trapped: bool,
         slow_uturn_move: bool,
+        mega_used: bool,
         volatile_statuses: HashSet<String>,
         substitute_health: i16,
         attack_boost: i8,
@@ -337,6 +344,7 @@ impl PySide {
             force_switch,
             force_trapped,
             slow_uturn_move,
+            mega_used,
             volatile_statuses,
             substitute_health,
             attack_boost,
@@ -586,9 +594,11 @@ pub struct PyPokemon {
     pub status: String,
     pub rest_turns: i8,
     pub sleep_turns: i8,
+    pub freeze_turns: i8,
     pub weight_kg: f32,
     pub terastallized: bool,
     pub tera_type: String,
+    pub mega_evolved: bool,
     pub moves: Vec<PyMove>,
 }
 
@@ -624,9 +634,11 @@ impl From<Pokemon> for PyPokemon {
             status: other.status.to_string(),
             rest_turns: other.rest_turns,
             sleep_turns: other.sleep_turns,
+            freeze_turns: other.freeze_turns,
             weight_kg: other.weight_kg,
             terastallized: other.terastallized,
             tera_type: other.tera_type.to_string(),
+            mega_evolved: other.mega_evolved,
             moves: other
                 .moves
                 .into_iter()
@@ -659,9 +671,7 @@ impl Into<Pokemon> for PyPokemon {
             base_ability: Abilities::from_str(&self.base_ability).unwrap(),
             item: Items::from_str(&self.item).unwrap(),
             nature: PokemonNature::from_str(&self.nature).unwrap(),
-            evs: (
-                self.evs.0, self.evs.1, self.evs.2, self.evs.3, self.evs.4, self.evs.5,
-            ),
+            evs: validate_champions_evs(self.evs).expect("invalid Champions stat points"),
             attack: self.attack,
             defense: self.defense,
             special_attack: self.special_attack,
@@ -670,9 +680,11 @@ impl Into<Pokemon> for PyPokemon {
             status: PokemonStatus::from_str(&self.status).unwrap(),
             rest_turns: self.rest_turns,
             sleep_turns: self.sleep_turns,
+            freeze_turns: self.freeze_turns,
             weight_kg: self.weight_kg,
             terastallized: self.terastallized,
             tera_type: PokemonType::from_str(&self.tera_type).unwrap(),
+            mega_evolved: self.mega_evolved,
             moves: PokemonMoves {
                 m0: moves_vec[0].clone().into(),
                 m1: moves_vec[1].clone().into(),
@@ -697,7 +709,7 @@ impl PyPokemon {
         base_ability="".to_string(),
         item="none".to_string(),
         nature="serious".to_string(),
-        evs=(85, 85, 85, 85, 85, 85),
+        evs=(11, 11, 11, 11, 11, 11),
         attack=100,
         defense=100,
         special_attack=100,
@@ -706,10 +718,12 @@ impl PyPokemon {
         status="none".to_string(),
         rest_turns=0,
         sleep_turns=0,
+        freeze_turns=0,
         weight_kg=0.0,
         moves=Vec::<PyMove>::new(),
         terastallized=false,
         tera_type="typeless".to_string(),
+        mega_evolved=false,
     ))]
     fn new(
         id: String,
@@ -731,15 +745,18 @@ impl PyPokemon {
         status: String,
         rest_turns: i8,
         sleep_turns: i8,
+        freeze_turns: i8,
         weight_kg: f32,
         moves: Vec<PyMove>,
         terastallized: bool,
         tera_type: String,
-    ) -> Self {
+        mega_evolved: bool,
+    ) -> PyResult<Self> {
+        validate_champions_evs(evs).map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
         if base_ability == "" {
             base_ability = ability.clone();
         }
-        PyPokemon {
+        Ok(PyPokemon {
             id,
             level,
             types,
@@ -759,11 +776,13 @@ impl PyPokemon {
             status,
             rest_turns,
             sleep_turns,
+            freeze_turns,
             weight_kg,
             terastallized,
             tera_type,
+            mega_evolved,
             moves,
-        }
+        })
     }
     #[staticmethod]
     pub fn create_fainted() -> PyPokemon {
@@ -905,12 +924,131 @@ impl PyIterativeDeepeningResult {
 }
 
 #[pyfunction]
-fn mcts(py_state: PyState, duration_ms: u64) -> PyResult<PyMctsResult> {
+fn mcts(py: Python<'_>, py_state: PyState, duration_ms: u64) -> PyResult<PyMctsResult> {
     let mut state: State = py_state.into();
     let duration = Duration::from_millis(duration_ms);
     let (s1_options, s2_options) = state.root_get_all_options();
-    let mcts_result = perform_mcts(&mut state, s1_options, s2_options, duration);
+    let mcts_result = py.detach(|| perform_mcts(&mut state, s1_options, s2_options, duration));
 
+    let py_mcts_result = PyMctsResult::from_mcts_result(mcts_result, &state);
+    Ok(py_mcts_result)
+}
+
+#[derive(Clone)]
+#[pyclass(
+    name = "TeamPreviewFilterSide",
+    module = "poke_engine",
+    get_all,
+    set_all
+)]
+struct PyTeamPreviewFilterSide {
+    valid_pokemon: Vec<String>,
+    leads: Option<Vec<String>>,
+}
+
+#[pymethods]
+impl PyTeamPreviewFilterSide {
+    #[new]
+    #[pyo3(signature = (
+        valid_pokemon=Vec::<String>::new(),
+        leads=None,
+    ))]
+    fn new(valid_pokemon: Vec<String>, leads: Option<Vec<String>>) -> Self {
+        PyTeamPreviewFilterSide {
+            valid_pokemon,
+            leads,
+        }
+    }
+}
+
+impl PyTeamPreviewFilterSide {
+    fn pokemon_name_to_index(side: &Side, name: &str) -> Option<PokemonIndex> {
+        if let Ok(pokemon_name) = PokemonName::from_str(name) {
+            let mut iter = side.pokemon.into_iter();
+            while let Some(pokemon) = iter.next() {
+                if pokemon.id == pokemon_name {
+                    return Some(iter.pokemon_index);
+                }
+            }
+        }
+        None
+    }
+
+    fn to_team_preview_options(
+        &self,
+        side: &Side,
+    ) -> (Vec<PokemonIndex>, Option<Vec<PokemonIndex>>) {
+        let mut valid_indices = Vec::new();
+        if self.valid_pokemon.is_empty() {
+            let mut iter = side.pokemon.into_iter();
+            while let Some(pokemon) = iter.next() {
+                if pokemon.hp > 0 && pokemon.id != PokemonName::NONE {
+                    valid_indices.push(iter.pokemon_index);
+                }
+            }
+        } else {
+            for name in &self.valid_pokemon {
+                if let Some(index) = Self::pokemon_name_to_index(side, name) {
+                    valid_indices.push(index);
+                }
+            }
+        }
+        let lead_indices = self.leads.as_ref().map(|leads| {
+            leads
+                .iter()
+                .filter_map(|name| Self::pokemon_name_to_index(side, name))
+                .collect::<Vec<PokemonIndex>>()
+        });
+        (valid_indices, lead_indices)
+    }
+}
+
+#[derive(Clone)]
+#[pyclass(name = "TeamPreviewFilters", module = "poke_engine", get_all, set_all)]
+struct PyTeamPreviewFilters {
+    side_one: PyTeamPreviewFilterSide,
+    side_two: PyTeamPreviewFilterSide,
+}
+
+#[pymethods]
+impl PyTeamPreviewFilters {
+    #[new]
+    #[pyo3(signature = (
+        side_one=PyTeamPreviewFilterSide::new(Vec::new(), None),
+        side_two=PyTeamPreviewFilterSide::new(Vec::new(), None),
+    ))]
+    fn new(side_one: PyTeamPreviewFilterSide, side_two: PyTeamPreviewFilterSide) -> Self {
+        PyTeamPreviewFilters { side_one, side_two }
+    }
+}
+
+#[pyfunction]
+fn mcts_team_preview(
+    py: Python<'_>,
+    py_state: PyState,
+    duration_ms: u64,
+    team_preview_filter: PyTeamPreviewFilters,
+) -> PyResult<PyMctsResult> {
+    let mut state: State = py_state.into();
+    if !state.team_preview {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "State is not in team preview phase",
+        ));
+    }
+
+    let s1_team_preview_options = team_preview_filter
+        .side_one
+        .to_team_preview_options(&state.side_one);
+    let s1_options =
+        State::generate_team_preview_options(&s1_team_preview_options.0, s1_team_preview_options.1);
+    let s2_team_preview_options = team_preview_filter
+        .side_two
+        .to_team_preview_options(&state.side_two);
+    let s2_options =
+        State::generate_team_preview_options(&s2_team_preview_options.0, s2_team_preview_options.1);
+
+    let duration = Duration::from_millis(duration_ms);
+    let mcts_result = py.detach(|| perform_mcts(&mut state, s1_options, s2_options, duration));
     let py_mcts_result = PyMctsResult::from_mcts_result(mcts_result, &state);
     Ok(py_mcts_result)
 }
@@ -1055,7 +1193,7 @@ fn calculate_damage(
         None => {
             return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
                 "Invalid move for s2: {}",
-                side_one_move
+                side_two_move
             )))
         }
     }
@@ -1082,13 +1220,217 @@ fn calculate_damage(
     Ok((s1_py_rolls, s2_py_rolls))
 }
 
+#[pyfunction(signature = (
+    py_state,
+    side_one_move,
+    side_two_move,
+    side_one_moves_first,
+    side_one_hit_number=None,
+    side_two_hit_number=None
+))]
+fn calculate_single_hit_damage(
+    py_state: PyState,
+    side_one_move: String,
+    side_two_move: String,
+    side_one_moves_first: bool,
+    side_one_hit_number: Option<i8>,
+    side_two_hit_number: Option<i8>,
+) -> PyResult<(Vec<i16>, Vec<i16>)> {
+    let state: State = py_state.into();
+    let (mut s1_choice, mut s2_choice);
+    match MOVES.get(&Choices::from_str(side_one_move.as_str()).unwrap()) {
+        Some(m) => s1_choice = m.to_owned(),
+        None => {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "Invalid move for s1: {}",
+                side_one_move
+            )))
+        }
+    }
+    match MOVES.get(&Choices::from_str(side_two_move.as_str()).unwrap()) {
+        Some(m) => s2_choice = m.to_owned(),
+        None => {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "Invalid move for s2: {}",
+                side_two_move
+            )))
+        }
+    }
+    if side_one_move == "switch" {
+        s1_choice.category = MoveCategory::Switch
+    }
+    if side_two_move == "switch" {
+        s2_choice.category = MoveCategory::Switch
+    }
+
+    let (s1_damage_rolls, s2_damage_rolls) = calculate_both_single_hit_damage_rolls_for_hits(
+        &state,
+        s1_choice,
+        s2_choice,
+        side_one_moves_first,
+        side_one_hit_number.unwrap_or(1).max(1),
+        side_two_hit_number.unwrap_or(1).max(1),
+    );
+
+    Ok((
+        s1_damage_rolls.unwrap_or_else(|| vec![0, 0]),
+        s2_damage_rolls.unwrap_or_else(|| vec![0, 0]),
+    ))
+}
+
+#[pyfunction]
+fn calculate_damage_with_choices(
+    py_state: PyState,
+    side_one_move: String,
+    side_two_move: String,
+    side_one_moves_first: bool,
+) -> PyResult<(Vec<i16>, Vec<i16>)> {
+    let state: State = py_state.into();
+    let s1_move = MoveChoice::from_string(&side_one_move, &state.side_one).ok_or_else(|| {
+        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+            "Invalid move for s1: {}",
+            side_one_move
+        ))
+    })?;
+    let s2_move = MoveChoice::from_string(&side_two_move, &state.side_two).ok_or_else(|| {
+        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+            "Invalid move for s2: {}",
+            side_two_move
+        ))
+    })?;
+
+    let (s1_damage_rolls, s2_damage_rolls) =
+        calculate_both_damage_rolls_with_choices(&state, &s1_move, &s2_move, side_one_moves_first);
+
+    Ok((
+        s1_damage_rolls.unwrap_or_else(|| vec![0, 0]),
+        s2_damage_rolls.unwrap_or_else(|| vec![0, 0]),
+    ))
+}
+
+#[pyfunction]
+fn calculate_damage_range(
+    py_state: PyState,
+    side_one_move: String,
+    side_two_move: String,
+    side_one_moves_first: bool,
+) -> PyResult<((i16, i16, i16, i16), (i16, i16, i16, i16))> {
+    let state: State = py_state.into();
+    let (mut s1_choice, mut s2_choice);
+    match MOVES.get(&Choices::from_str(side_one_move.as_str()).unwrap()) {
+        Some(m) => s1_choice = m.to_owned(),
+        None => {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "Invalid move for s1: {}",
+                side_one_move
+            )))
+        }
+    }
+    match MOVES.get(&Choices::from_str(side_two_move.as_str()).unwrap()) {
+        Some(m) => s2_choice = m.to_owned(),
+        None => {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "Invalid move for s2: {}",
+                side_one_move
+            )))
+        }
+    }
+    if side_one_move == "switch" {
+        s1_choice.category = MoveCategory::Switch
+    }
+    if side_two_move == "switch" {
+        s2_choice.category = MoveCategory::Switch
+    }
+    let ((s1_min_rolls, s1_max_rolls), (s2_min_rolls, s2_max_rolls)) =
+        calculate_both_damage_roll_ranges(&state, s1_choice, s2_choice, side_one_moves_first);
+
+    let s1_min = match s1_min_rolls {
+        Some(rolls) if rolls.len() >= 2 => (rolls[0], rolls[1]),
+        _ => (0, 0),
+    };
+    let s2_min = match s2_min_rolls {
+        Some(rolls) if rolls.len() >= 2 => (rolls[0], rolls[1]),
+        _ => (0, 0),
+    };
+    let s1_max = match s1_max_rolls {
+        Some(rolls) if rolls.len() >= 2 => (rolls[0], rolls[1]),
+        _ => (0, 0),
+    };
+    let s2_max = match s2_max_rolls {
+        Some(rolls) if rolls.len() >= 2 => (rolls[0], rolls[1]),
+        _ => (0, 0),
+    };
+
+    Ok((
+        (s1_min.0, s1_max.0, s1_min.1, s1_max.1),
+        (s2_min.0, s2_max.0, s2_min.1, s2_max.1),
+    ))
+}
+
+#[pyfunction]
+fn calculate_damage_range_with_choices(
+    py_state: PyState,
+    side_one_move: String,
+    side_two_move: String,
+    side_one_moves_first: bool,
+) -> PyResult<((i16, i16, i16, i16), (i16, i16, i16, i16))> {
+    let state: State = py_state.into();
+    let s1_move = MoveChoice::from_string(&side_one_move, &state.side_one).ok_or_else(|| {
+        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+            "Invalid move for s1: {}",
+            side_one_move
+        ))
+    })?;
+    let s2_move = MoveChoice::from_string(&side_two_move, &state.side_two).ok_or_else(|| {
+        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+            "Invalid move for s2: {}",
+            side_two_move
+        ))
+    })?;
+
+    let ((s1_min_rolls, s1_max_rolls), (s2_min_rolls, s2_max_rolls)) =
+        calculate_both_damage_roll_ranges_with_choices(
+            &state,
+            &s1_move,
+            &s2_move,
+            side_one_moves_first,
+        );
+
+    let s1_min = match s1_min_rolls {
+        Some(rolls) if rolls.len() >= 2 => (rolls[0], rolls[1]),
+        _ => (0, 0),
+    };
+    let s2_min = match s2_min_rolls {
+        Some(rolls) if rolls.len() >= 2 => (rolls[0], rolls[1]),
+        _ => (0, 0),
+    };
+    let s1_max = match s1_max_rolls {
+        Some(rolls) if rolls.len() >= 2 => (rolls[0], rolls[1]),
+        _ => (0, 0),
+    };
+    let s2_max = match s2_max_rolls {
+        Some(rolls) if rolls.len() >= 2 => (rolls[0], rolls[1]),
+        _ => (0, 0),
+    };
+
+    Ok((
+        (s1_min.0, s1_max.0, s1_min.1, s1_max.1),
+        (s2_min.0, s2_max.0, s2_min.1, s2_max.1),
+    ))
+}
+
 #[pymodule]
 #[pyo3(name = "poke_engine")]
 fn py_poke_engine(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(calculate_damage, m)?)?;
+    m.add_function(wrap_pyfunction!(calculate_single_hit_damage, m)?)?;
+    m.add_function(wrap_pyfunction!(calculate_damage_with_choices, m)?)?;
+    m.add_function(wrap_pyfunction!(calculate_damage_range, m)?)?;
+    m.add_function(wrap_pyfunction!(calculate_damage_range_with_choices, m)?)?;
     m.add_function(wrap_pyfunction!(generate_instructions, m)?)?;
     m.add_function(wrap_pyfunction!(id, m)?)?;
     m.add_function(wrap_pyfunction!(mcts, m)?)?;
+    m.add_function(wrap_pyfunction!(mcts_team_preview, m)?)?;
     m.add_class::<PyState>()?;
     m.add_class::<PySide>()?;
     m.add_class::<PySideConditions>()?;
@@ -1097,5 +1439,7 @@ fn py_poke_engine(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyMove>()?;
     m.add_class::<PyStateInstructions>()?;
     m.add_class::<PyInstruction>()?;
+    m.add_class::<PyTeamPreviewFilters>()?;
+    m.add_class::<PyTeamPreviewFilterSide>()?;
     Ok(())
 }

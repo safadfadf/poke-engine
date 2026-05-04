@@ -230,6 +230,29 @@ define_enum_with_from_str! {
         GALLADITE,
         AUDINITE,
         DIANCITE,
+        DRAGONINITE,
+        CLEFABLITE,
+        MEGANIUMITE,
+        FERALIGITE,
+        EMBOARITE,
+        CHESNAUGHTITE,
+        DELPHOXITE,
+        GRENINJITE,
+        CRABOMINITE,
+        GOLURKITE,
+        SCOVILLAINITE,
+        GLIMMORANITE,
+        FLOETTITE,
+        VICTREEBELITE,
+        STARMINITE,
+        HAWLUCHANITE,
+        SKARMORITE,
+        MEOWSTICITE,
+        FROSLASSITE,
+        EXCADRITE,
+        DRAMPANITE,
+        CHIMECHITE,
+        CHANDELURITE,
     },
     default = UNKNOWNITEM
 }
@@ -1130,6 +1153,9 @@ pub fn item_modify_attack_being_used(
             if attacking_choice.category == MoveCategory::Special {
                 attacking_choice.base_power *= 1.5;
             }
+        }
+        Items::WIDELENS => {
+            attacking_choice.accuracy *= 1.1;
         }
         #[cfg(feature = "gen3")]
         Items::DRAGONFANG | Items::DRAGONSCALE => {

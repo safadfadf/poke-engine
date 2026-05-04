@@ -27,6 +27,21 @@ const POKEMON_BOOST_MULTIPLIER_NEG_3: f32 = -2.5;
 const POKEMON_BOOST_MULTIPLIER_NEG_4: f32 = -3.0;
 const POKEMON_BOOST_MULTIPLIER_NEG_5: f32 = -3.15;
 const POKEMON_BOOST_MULTIPLIER_NEG_6: f32 = -3.3;
+const POKEMON_BOOST_MULTIPLIERS: [f32; 13] = [
+    POKEMON_BOOST_MULTIPLIER_NEG_6,
+    POKEMON_BOOST_MULTIPLIER_NEG_5,
+    POKEMON_BOOST_MULTIPLIER_NEG_4,
+    POKEMON_BOOST_MULTIPLIER_NEG_3,
+    POKEMON_BOOST_MULTIPLIER_NEG_2,
+    POKEMON_BOOST_MULTIPLIER_NEG_1,
+    POKEMON_BOOST_MULTIPLIER_0,
+    POKEMON_BOOST_MULTIPLIER_1,
+    POKEMON_BOOST_MULTIPLIER_2,
+    POKEMON_BOOST_MULTIPLIER_3,
+    POKEMON_BOOST_MULTIPLIER_4,
+    POKEMON_BOOST_MULTIPLIER_5,
+    POKEMON_BOOST_MULTIPLIER_6,
+];
 
 const POKEMON_FROZEN: f32 = -40.0;
 const POKEMON_ASLEEP: f32 = -25.0;
@@ -51,6 +66,7 @@ const SPIKES: f32 = -7.0;
 const TOXIC_SPIKES: f32 = -7.0;
 const STICKY_WEB: f32 = -25.0;
 
+#[inline]
 fn evaluate_poison(pokemon: &Pokemon, base_score: f32) -> f32 {
     match pokemon.ability {
         Abilities::POISONHEAL => 15.0,
@@ -63,6 +79,7 @@ fn evaluate_poison(pokemon: &Pokemon, base_score: f32) -> f32 {
     }
 }
 
+#[inline]
 fn evaluate_burned(pokemon: &Pokemon) -> f32 {
     // burn is not as punishing in certain situations
 
@@ -89,25 +106,16 @@ fn evaluate_burned(pokemon: &Pokemon) -> f32 {
     multiplier * POKEMON_BURNED
 }
 
+#[inline]
 fn get_boost_multiplier(boost: i8) -> f32 {
-    match boost {
-        6 => POKEMON_BOOST_MULTIPLIER_6,
-        5 => POKEMON_BOOST_MULTIPLIER_5,
-        4 => POKEMON_BOOST_MULTIPLIER_4,
-        3 => POKEMON_BOOST_MULTIPLIER_3,
-        2 => POKEMON_BOOST_MULTIPLIER_2,
-        1 => POKEMON_BOOST_MULTIPLIER_1,
-        0 => POKEMON_BOOST_MULTIPLIER_0,
-        -1 => POKEMON_BOOST_MULTIPLIER_NEG_1,
-        -2 => POKEMON_BOOST_MULTIPLIER_NEG_2,
-        -3 => POKEMON_BOOST_MULTIPLIER_NEG_3,
-        -4 => POKEMON_BOOST_MULTIPLIER_NEG_4,
-        -5 => POKEMON_BOOST_MULTIPLIER_NEG_5,
-        -6 => POKEMON_BOOST_MULTIPLIER_NEG_6,
-        _ => panic!("Invalid boost value: {}", boost),
+    if (-6..=6).contains(&boost) {
+        POKEMON_BOOST_MULTIPLIERS[(boost + 6) as usize]
+    } else {
+        panic!("Invalid boost value: {}", boost)
     }
 }
 
+#[inline]
 fn evaluate_hazards(pokemon: &Pokemon, side: &Side) -> f32 {
     let mut score = 0.0;
     let pkmn_is_grounded = pokemon.is_grounded();
@@ -127,6 +135,7 @@ fn evaluate_hazards(pokemon: &Pokemon, side: &Side) -> f32 {
     score
 }
 
+#[inline]
 fn evaluate_pokemon(pokemon: &Pokemon) -> f32 {
     let mut score = 0.0;
     score += POKEMON_HP * pokemon.hp as f32 / pokemon.maxhp as f32;
@@ -156,6 +165,7 @@ fn evaluate_pokemon(pokemon: &Pokemon) -> f32 {
     score
 }
 
+#[inline]
 pub fn evaluate(state: &State) -> f32 {
     let mut score = 0.0;
 

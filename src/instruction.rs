@@ -57,6 +57,7 @@ pub enum Instruction {
     DecrementTerrainTurnsRemaining,
     ChangeType(ChangeType),
     ChangeAbility(ChangeAbilityInstruction),
+    ChangeBaseAbility(ChangeAbilityInstruction),
     ChangeItem(ChangeItemInstruction),
     ChangeAttack(ChangeStatInstruction),
     ChangeDefense(ChangeStatInstruction),
@@ -73,6 +74,7 @@ pub enum Instruction {
     DecrementRestTurns(DecrementRestTurnsInstruction),
     SetRestTurns(SetSleepTurnsInstruction),
     SetSleepTurns(SetSleepTurnsInstruction),
+    SetFreezeTurns(SetSleepTurnsInstruction),
     ChangeSubstituteHealth(ChangeSubsituteHealthInstruction),
     FormeChange(FormeChangeInstruction),
     SetSideOneMoveSecondSwitchOutMove(SetSecondMoveSwitchOutMoveInstruction),
@@ -89,6 +91,8 @@ pub enum Instruction {
     ToggleSideOneForceSwitch,
     ToggleSideTwoForceSwitch,
     ToggleTerastallized(ToggleTerastallizedInstruction),
+    ToggleMegaEvolved(ToggleMegaEvolvedInstruction),
+    TeamPreview(TeamPreviewInstruction),
 }
 
 impl fmt::Debug for Instruction {
@@ -181,6 +185,13 @@ impl fmt::Debug for Instruction {
             Instruction::ChangeAbility(c) => {
                 write!(f, "ChangeAbility {:?}: {:?}", c.side_ref, c.ability_change)
             }
+            Instruction::ChangeBaseAbility(c) => {
+                write!(
+                    f,
+                    "ChangeBaseAbility {:?}: {:?}",
+                    c.side_ref, c.ability_change
+                )
+            }
             Instruction::ChangeItem(c) => {
                 write!(
                     f,
@@ -249,6 +260,13 @@ impl fmt::Debug for Instruction {
                     s.side_ref, s.pokemon_index, s.previous_turns, s.new_turns
                 )
             }
+            Instruction::SetFreezeTurns(s) => {
+                write!(
+                    f,
+                    "SetFreezeTurns {:?}-{:?}: {:?} -> {:?}",
+                    s.side_ref, s.pokemon_index, s.previous_turns, s.new_turns
+                )
+            }
             Instruction::ChangeSubstituteHealth(s) => {
                 write!(
                     f,
@@ -281,6 +299,13 @@ impl fmt::Debug for Instruction {
             }
             Instruction::ToggleTerastallized(s) => {
                 write!(f, "ToggleTerastallized {:?}", s.side_ref)
+            }
+            Instruction::ToggleMegaEvolved(s) => {
+                write!(
+                    f,
+                    "ToggleMegaEvolved {:?}: {:?}",
+                    s.side_ref, s.pokemon_index
+                )
             }
             Instruction::SetLastUsedMove(s) => {
                 write!(
@@ -331,6 +356,13 @@ impl fmt::Debug for Instruction {
             }
             Instruction::ToggleSideTwoForceSwitch => {
                 write!(f, "ToggleSideTwoForceSwitch")
+            }
+            Instruction::TeamPreview(s) => {
+                write!(
+                    f,
+                    "TeamPreview {:?}: {:?},{:?},{:?}",
+                    s.side_ref, s.lead_index, s.reserve_index_one, s.reserve_index_two
+                )
             }
         }
     }
@@ -479,6 +511,16 @@ pub struct SwitchInstruction {
     pub next_index: PokemonIndex,
 }
 
+#[derive(Debug, PartialEq, Clone)]
+pub struct TeamPreviewInstruction {
+    pub side_ref: SideReference,
+    pub previous_active_index: PokemonIndex,
+    pub previous_pokemon: String,
+    pub lead_index: PokemonIndex,
+    pub reserve_index_one: PokemonIndex,
+    pub reserve_index_two: PokemonIndex,
+}
+
 // pokemon_index is present because even reserve pokemon can have their status
 // changed (i.e. healbell)
 #[derive(Debug, PartialEq, Clone)]
@@ -551,6 +593,12 @@ pub struct ToggleTerastallizedInstruction {
 }
 
 #[derive(Debug, PartialEq, Clone)]
+pub struct ToggleMegaEvolvedInstruction {
+    pub side_ref: SideReference,
+    pub pokemon_index: PokemonIndex,
+}
+
+#[derive(Debug, PartialEq, Clone)]
 pub struct ChangeType {
     pub side_ref: SideReference,
     pub new_types: (PokemonType, PokemonType),
@@ -573,7 +621,7 @@ mod test {
     // Make sure that the size of the Instruction enum doesn't change
     #[test]
     fn test_instruction_size() {
-        assert_eq!(size_of::<Instruction>(), 6);
-        assert_eq!(align_of::<Instruction>(), 2);
+        assert_eq!(size_of::<Instruction>(), 32);
+        assert_eq!(align_of::<Instruction>(), 8);
     }
 }

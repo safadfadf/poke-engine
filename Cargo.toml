@@ -16,10 +16,14 @@ name = "poke-engine"
 path = "src/main.rs"
 
 [profile.release]
-debug = 1
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+debug = 0
 
 [dependencies]
 clap = { version = "4.5.4", features = ["derive"] }
+mimalloc = { version = "0.1", default-features = false }
 rand = "0.9.1"
 
 [features]

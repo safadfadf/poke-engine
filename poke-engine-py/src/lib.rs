@@ -80,6 +80,7 @@ impl Into<State> for PyState {
                 active: self.trick_room,
                 turns_remaining: self.trick_room_turns_remaining,
             },
+            faint_events: Vec::new(),
             team_preview: self.team_preview,
             use_last_used_move: false,
             use_damage_dealt: false,

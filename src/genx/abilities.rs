@@ -13,8 +13,9 @@ use crate::define_enum_with_from_str;
 use crate::instruction::{
     ApplyVolatileStatusInstruction, BoostInstruction, ChangeAbilityInstruction,
     ChangeItemInstruction, ChangeSideConditionInstruction, ChangeStatusInstruction, ChangeTerrain,
-    ChangeType, ChangeVolatileStatusDurationInstruction, ChangeWeather, DamageInstruction,
-    FormeChangeInstruction, HealInstruction, Instruction, StateInstructions,
+    ChangeType, ChangeVolatileStatusDurationInstruction, ChangeWeather,
+    DamageWithFaintContextInstruction, FaintContext, FormeChangeInstruction, HealInstruction,
+    Instruction, StateInstructions,
 };
 use crate::pokemon::PokemonName;
 use crate::state::{
@@ -516,75 +517,83 @@ pub fn ability_before_move(
     instructions: &mut StateInstructions,
 ) {
     let (attacking_side, defending_side) = state.get_both_sides(side_ref);
+    let defending_index = defending_side.active_index;
+    let active_ability = attacking_side.get_active_immutable().ability;
+    let defender_has_substitute = defending_side
+        .volatile_statuses
+        .contains(&PokemonVolatileStatus::SUBSTITUTE);
     let active_pkmn = attacking_side.get_active();
     let defending_pkmn = defending_side.get_active();
 
-    match defending_pkmn.ability {
-        Abilities::NEUTRALIZINGGAS => {
-            return;
-        }
-        // Incomplete: IceFace should not stop secondaries, but setting base_power to 0 makes
-        // secondaries not apply in this engine
-        Abilities::ICEFACE => {
-            if defending_pkmn.id == PokemonName::EISCUE && choice.category == MoveCategory::Physical
+    if active_ability == Abilities::NEUTRALIZINGGAS {
+        // Neutralizing Gas suppresses the defender's damage-prevention abilities.
+    } else {
+        match defending_pkmn.ability {
+            Abilities::NEUTRALIZINGGAS => {
+                return;
+            }
+            Abilities::ICEFACE => {
+                let hit_substitute = defender_has_substitute
+                    && !choice.flags.sound
+                    && active_ability != Abilities::INFILTRATOR;
+                if defending_pkmn.id == PokemonName::EISCUE
+                    && choice.category == MoveCategory::Physical
+                    && !hit_substitute
+                {
+                    choice.damage_blocked = true;
+                }
+            }
+            // Technically incorrect
+            // A move missing should not trigger this formechange
+            #[cfg(not(any(feature = "gen8", feature = "gen9")))]
+            Abilities::DISGUISE
+                if (choice.category == MoveCategory::Physical
+                    || choice.category == MoveCategory::Special)
+                    && (defending_pkmn.id == PokemonName::MIMIKYU
+                        || defending_pkmn.id == PokemonName::MIMIKYUTOTEM) =>
             {
-                // hacky - changing the move to a status move makes it do no
-                // damage but preserve secondary effects
-                // due to some bad choices I made I cannot just set base_power to 0
-                choice.category = MoveCategory::Status;
+                choice.base_power = 0.0;
                 instructions.instruction_list.push(Instruction::FormeChange(
                     FormeChangeInstruction {
                         side_ref: side_ref.get_other_side(),
-                        name_change: PokemonName::EISCUENOICE as i16 - defending_pkmn.id as i16,
+                        name_change: PokemonName::MIMIKYUBUSTED as i16 - defending_pkmn.id as i16,
                     },
                 ));
-                defending_pkmn.id = PokemonName::EISCUENOICE;
-                defending_pkmn.recalculate_stats(&side_ref.get_other_side(), instructions);
+                defending_pkmn.id = PokemonName::MIMIKYUBUSTED;
             }
+            #[cfg(any(feature = "gen8", feature = "gen9"))]
+            Abilities::DISGUISE
+                if (choice.category == MoveCategory::Physical
+                    || choice.category == MoveCategory::Special)
+                    && (defending_pkmn.id == PokemonName::MIMIKYU
+                        || defending_pkmn.id == PokemonName::MIMIKYUTOTEM) =>
+            {
+                choice.base_power = 0.0;
+                instructions.instruction_list.push(Instruction::FormeChange(
+                    FormeChangeInstruction {
+                        side_ref: side_ref.get_other_side(),
+                        name_change: PokemonName::MIMIKYUBUSTED as i16 - defending_pkmn.id as i16,
+                    },
+                ));
+                defending_pkmn.id = PokemonName::MIMIKYUBUSTED;
+                let dmg = cmp::min(defending_pkmn.hp, defending_pkmn.maxhp / 8);
+                instructions
+                    .instruction_list
+                    .push(Instruction::DamageWithFaintContext(
+                        DamageWithFaintContextInstruction {
+                            side_ref: side_ref.get_other_side(),
+                            damage_amount: dmg,
+                            faint_context: FaintContext::ability_effect(
+                                side_ref.get_other_side(),
+                                defending_index,
+                                Abilities::DISGUISE,
+                            ),
+                        },
+                    ));
+                defending_pkmn.hp -= dmg;
+            }
+            _ => {}
         }
-        // Technically incorrect
-        // A move missing should not trigger this formechange
-        #[cfg(not(any(feature = "gen8", feature = "gen9")))]
-        Abilities::DISGUISE
-            if (choice.category == MoveCategory::Physical
-                || choice.category == MoveCategory::Special)
-                && (defending_pkmn.id == PokemonName::MIMIKYU
-                    || defending_pkmn.id == PokemonName::MIMIKYUTOTEM) =>
-        {
-            choice.base_power = 0.0;
-            instructions
-                .instruction_list
-                .push(Instruction::FormeChange(FormeChangeInstruction {
-                    side_ref: side_ref.get_other_side(),
-                    name_change: PokemonName::MIMIKYUBUSTED as i16 - defending_pkmn.id as i16,
-                }));
-            defending_pkmn.id = PokemonName::MIMIKYUBUSTED;
-        }
-        #[cfg(any(feature = "gen8", feature = "gen9"))]
-        Abilities::DISGUISE
-            if (choice.category == MoveCategory::Physical
-                || choice.category == MoveCategory::Special)
-                && (defending_pkmn.id == PokemonName::MIMIKYU
-                    || defending_pkmn.id == PokemonName::MIMIKYUTOTEM) =>
-        {
-            choice.base_power = 0.0;
-            instructions
-                .instruction_list
-                .push(Instruction::FormeChange(FormeChangeInstruction {
-                    side_ref: side_ref.get_other_side(),
-                    name_change: PokemonName::MIMIKYUBUSTED as i16 - defending_pkmn.id as i16,
-                }));
-            defending_pkmn.id = PokemonName::MIMIKYUBUSTED;
-            let dmg = cmp::min(defending_pkmn.hp, defending_pkmn.maxhp / 8);
-            instructions
-                .instruction_list
-                .push(Instruction::Damage(DamageInstruction {
-                    side_ref: side_ref.get_other_side(),
-                    damage_amount: dmg,
-                }));
-            defending_pkmn.hp -= dmg;
-        }
-        _ => {}
     }
     match active_pkmn.ability {
         Abilities::GULPMISSILE => {
@@ -783,6 +792,7 @@ pub fn ability_after_damage_hit(
         _ => {}
     }
     let (attacking_side, defending_side) = state.get_both_sides(side_ref);
+    let defending_index = defending_side.active_index;
     let attacking_pkmn = attacking_side.get_active();
     let defending_pkmn = defending_side.get_active();
     match defending_pkmn.ability {
@@ -812,10 +822,17 @@ pub fn ability_after_damage_hit(
                 let damage_dealt = cmp::min(attacking_pkmn.maxhp / 4, attacking_pkmn.hp);
                 instructions
                     .instruction_list
-                    .push(Instruction::Damage(DamageInstruction {
-                        side_ref: *side_ref,
-                        damage_amount: damage_dealt,
-                    }));
+                    .push(Instruction::DamageWithFaintContext(
+                        DamageWithFaintContextInstruction {
+                            side_ref: *side_ref,
+                            damage_amount: damage_dealt,
+                            faint_context: FaintContext::ability_effect(
+                                side_ref.get_other_side(),
+                                defending_index,
+                                Abilities::GULPMISSILE,
+                            ),
+                        },
+                    ));
                 attacking_pkmn.hp -= damage_dealt;
 
                 if defending_pkmn.id == PokemonName::CRAMORANTGULPING {
@@ -947,10 +964,17 @@ pub fn ability_after_damage_hit(
 
                 instructions
                     .instruction_list
-                    .push(Instruction::Damage(DamageInstruction {
-                        side_ref: *side_ref,
-                        damage_amount: damage_dealt,
-                    }));
+                    .push(Instruction::DamageWithFaintContext(
+                        DamageWithFaintContextInstruction {
+                            side_ref: *side_ref,
+                            damage_amount: damage_dealt,
+                            faint_context: FaintContext::ability_effect(
+                                side_ref.get_other_side(),
+                                defending_index,
+                                defending_pkmn.ability,
+                            ),
+                        },
+                    ));
                 attacking_pkmn.hp -= damage_dealt;
             }
         }
@@ -967,10 +991,17 @@ pub fn ability_after_damage_hit(
                 let damage_dealt = cmp::min(attacking_pkmn.maxhp / 4, attacking_pkmn.hp);
                 instructions
                     .instruction_list
-                    .push(Instruction::Damage(DamageInstruction {
-                        side_ref: *side_ref,
-                        damage_amount: damage_dealt,
-                    }));
+                    .push(Instruction::DamageWithFaintContext(
+                        DamageWithFaintContextInstruction {
+                            side_ref: *side_ref,
+                            damage_amount: damage_dealt,
+                            faint_context: FaintContext::ability_effect(
+                                side_ref.get_other_side(),
+                                defending_index,
+                                Abilities::AFTERMATH,
+                            ),
+                        },
+                    ));
                 attacking_pkmn.hp -= damage_dealt;
             }
         }
@@ -979,10 +1010,17 @@ pub fn ability_after_damage_hit(
                 let damage_dealt = cmp::min(damage_dealt, attacking_pkmn.hp);
                 instructions
                     .instruction_list
-                    .push(Instruction::Damage(DamageInstruction {
-                        side_ref: *side_ref,
-                        damage_amount: damage_dealt,
-                    }));
+                    .push(Instruction::DamageWithFaintContext(
+                        DamageWithFaintContextInstruction {
+                            side_ref: *side_ref,
+                            damage_amount: damage_dealt,
+                            faint_context: FaintContext::ability_effect(
+                                side_ref.get_other_side(),
+                                defending_index,
+                                Abilities::INNARDSOUT,
+                            ),
+                        },
+                    ));
                 attacking_pkmn.hp -= damage_dealt;
             }
         }
@@ -1022,6 +1060,65 @@ pub fn ability_after_damage_hit(
         }
         _ => {}
     }
+}
+
+pub fn ability_after_substitute_hit(
+    attacking_side: &mut Side,
+    defending_side: &Side,
+    attacking_ability: Abilities,
+    choice: &Choice,
+    side_ref: &SideReference,
+    damage_dealt: i16,
+    instructions: &mut StateInstructions,
+) {
+    let defending_pkmn = defending_side.get_active_immutable();
+    if defending_pkmn.ability == Abilities::NEUTRALIZINGGAS
+        || attacking_ability == Abilities::NEUTRALIZINGGAS
+    {
+        return;
+    }
+
+    if defending_pkmn.ability == Abilities::TOXICDEBRIS
+        && damage_dealt > 0
+        && choice.category == MoveCategory::Physical
+        && attacking_side.side_conditions.toxic_spikes < 2
+    {
+        instructions
+            .instruction_list
+            .push(Instruction::ChangeSideCondition(
+                ChangeSideConditionInstruction {
+                    side_ref: *side_ref,
+                    side_condition: PokemonSideCondition::ToxicSpikes,
+                    amount: 1,
+                },
+            ));
+        attacking_side.side_conditions.toxic_spikes += 1;
+    }
+}
+
+pub fn ability_on_damage_blocked(
+    defending_side: &mut Side,
+    choice: &Choice,
+    defending_side_ref: &SideReference,
+    instructions: &mut StateInstructions,
+) -> bool {
+    let defending_pkmn = defending_side.get_active();
+
+    if choice.damage_blocked
+        && defending_pkmn.ability == Abilities::ICEFACE
+        && defending_pkmn.id == PokemonName::EISCUE
+    {
+        instructions
+            .instruction_list
+            .push(Instruction::FormeChange(FormeChangeInstruction {
+                side_ref: *defending_side_ref,
+                name_change: PokemonName::EISCUENOICE as i16 - defending_pkmn.id as i16,
+            }));
+        defending_pkmn.id = PokemonName::EISCUENOICE;
+        defending_pkmn.recalculate_stats(defending_side_ref, instructions);
+        return true;
+    }
+    false
 }
 
 fn apply_spicy_spray_burn(
@@ -1180,7 +1277,10 @@ pub fn ability_end_of_turn(
     side_ref: &SideReference,
     instructions: &mut StateInstructions,
 ) {
+    let sun_is_active =
+        state.weather_is_active(&Weather::HARSHSUN) || state.weather_is_active(&Weather::SUN);
     let (attacking_side, defending_side) = state.get_both_sides(side_ref);
+    let attacking_index = attacking_side.active_index;
     let active_pkmn = attacking_side.get_active();
     if defending_side.get_active_immutable().ability == Abilities::NEUTRALIZINGGAS {
         return;
@@ -1260,26 +1360,38 @@ pub fn ability_end_of_turn(
                 let damage_dealt = cmp::min(defender.maxhp / 8, defender.hp);
                 instructions
                     .instruction_list
-                    .push(Instruction::Damage(DamageInstruction {
-                        side_ref: side_ref.get_other_side(),
-                        damage_amount: damage_dealt,
-                    }));
+                    .push(Instruction::DamageWithFaintContext(
+                        DamageWithFaintContextInstruction {
+                            side_ref: side_ref.get_other_side(),
+                            damage_amount: damage_dealt,
+                            faint_context: FaintContext::ability_effect(
+                                *side_ref,
+                                attacking_index,
+                                Abilities::BADDREAMS,
+                            ),
+                        },
+                    ));
                 defender.hp -= damage_dealt;
             }
         }
         Abilities::SOLARPOWER => {
-            if state.weather_is_active(&Weather::HARSHSUN) || state.weather_is_active(&Weather::SUN)
-            {
-                let active_pkmn = state.get_side(side_ref).get_active();
+            if sun_is_active {
                 let damage_dealt =
                     cmp::min(active_pkmn.maxhp / 8, active_pkmn.maxhp - active_pkmn.hp);
                 if damage_dealt > 0 {
                     instructions
                         .instruction_list
-                        .push(Instruction::Damage(DamageInstruction {
-                            side_ref: *side_ref,
-                            damage_amount: damage_dealt,
-                        }));
+                        .push(Instruction::DamageWithFaintContext(
+                            DamageWithFaintContextInstruction {
+                                side_ref: *side_ref,
+                                damage_amount: damage_dealt,
+                                faint_context: FaintContext::ability_effect(
+                                    *side_ref,
+                                    attacking_index,
+                                    Abilities::SOLARPOWER,
+                                ),
+                            },
+                        ));
                     active_pkmn.hp -= damage_dealt;
                 }
             }
@@ -2197,6 +2309,7 @@ pub fn ability_modify_attack_being_used(
         Abilities::UNSEENFIST => {
             if attacker_choice.flags.contact {
                 attacker_choice.bypasses_protect = true;
+                attacker_choice.protect_bypass_damage_multiplier = 0.25;
             }
         }
         Abilities::PIERCINGDRILL => {

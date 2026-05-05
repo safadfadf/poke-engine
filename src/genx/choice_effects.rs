@@ -10,8 +10,9 @@ use crate::instruction::{
     ApplyVolatileStatusInstruction, BoostInstruction, ChangeItemInstruction,
     ChangeSideConditionInstruction, ChangeStatusInstruction, ChangeSubsituteHealthInstruction,
     ChangeTerrain, ChangeType, ChangeWeather, ChangeWishInstruction, DamageInstruction,
-    HealInstruction, Instruction, RemoveVolatileStatusInstruction, SetFutureSightInstruction,
-    SetSleepTurnsInstruction, StateInstructions, ToggleTrickRoomInstruction,
+    DamageWithFaintContextInstruction, FaintCause, FaintContext, HealInstruction, Instruction,
+    RemoveVolatileStatusInstruction, SetFutureSightInstruction, SetSleepTurnsInstruction,
+    StateInstructions, ToggleTrickRoomInstruction,
 };
 use crate::pokemon::PokemonName;
 use crate::state::{
@@ -87,17 +88,17 @@ pub fn modify_choice(
             // percentages are a hack and are incorrect in situations
             // where one or more status effects are not possible
             attacker_choice.add_or_create_secondaries(Secondary {
-                chance: 16.67,
+                chance: 10.00,
                 target: MoveTarget::Opponent,
                 effect: Effect::Status(PokemonStatus::POISON),
             });
             attacker_choice.add_or_create_secondaries(Secondary {
-                chance: 20.00,
+                chance: 11.11,
                 target: MoveTarget::Opponent,
                 effect: Effect::Status(PokemonStatus::PARALYZE),
             });
             attacker_choice.add_or_create_secondaries(Secondary {
-                chance: 25.0,
+                chance: 12.5,
                 target: MoveTarget::Opponent,
                 effect: Effect::Status(PokemonStatus::SLEEP),
             });
@@ -280,6 +281,12 @@ pub fn modify_choice(
             if state.terrain.terrain_type == Terrain::MISTYTERRAIN {
                 attacker_choice.base_power *= 1.5;
             }
+        }
+        Choices::MINDBLOWN => {
+            attacker_choice.heal = Some(Heal {
+                target: MoveTarget::User,
+                amount: -0.5,
+            });
         }
         #[cfg(any(feature = "gen3", feature = "gen4"))]
         Choices::EXPLOSION | Choices::SELFDESTRUCT => {
@@ -930,6 +937,7 @@ pub fn choice_before_move(
         );
     }
 
+    let active_attacker_index = attacking_side.active_index;
     let attacker = attacking_side.get_active();
     let defender = defending_side.get_active_immutable();
 
@@ -953,21 +961,19 @@ pub fn choice_before_move(
             let damage_amount = attacker.hp;
             instructions
                 .instruction_list
-                .push(Instruction::Damage(DamageInstruction {
-                    side_ref: *attacking_side_ref,
-                    damage_amount,
-                }));
+                .push(Instruction::DamageWithFaintContext(
+                    DamageWithFaintContextInstruction {
+                        side_ref: *attacking_side_ref,
+                        damage_amount,
+                        faint_context: FaintContext::move_effect(
+                            *attacking_side_ref,
+                            active_attacker_index,
+                            FaintCause::SelfKoMove,
+                            choice.move_id,
+                        ),
+                    },
+                ));
             attacker.hp = 0;
-        }
-        Choices::MINDBLOWN if defender.ability != Abilities::DAMP => {
-            let damage_amount = cmp::min(attacker.maxhp / 2, attacker.hp);
-            instructions
-                .instruction_list
-                .push(Instruction::Damage(DamageInstruction {
-                    side_ref: *attacking_side_ref,
-                    damage_amount,
-                }));
-            attacker.hp -= damage_amount;
         }
         Choices::METEORBEAM | Choices::ELECTROSHOT if choice.flags.charge => {
             apply_boost_instruction(
@@ -1241,6 +1247,7 @@ pub fn choice_special_effect(
     instructions: &mut StateInstructions,
 ) {
     let (attacking_side, defending_side) = state.get_both_sides(attacking_side_ref);
+    let attacker_index = attacking_side.active_index;
     match choice.move_id {
         Choices::BELLYDRUM => {
             let boost_amount = 6 - attacking_side.attack_boost;
@@ -1276,10 +1283,18 @@ pub fn choice_special_effect(
                 if damage_amount > 0 {
                     instructions
                         .instruction_list
-                        .push(Instruction::Damage(DamageInstruction {
-                            side_ref: attacking_side_ref.get_other_side(),
-                            damage_amount: damage_amount,
-                        }));
+                        .push(Instruction::DamageWithFaintContext(
+                            DamageWithFaintContextInstruction {
+                                side_ref: attacking_side_ref.get_other_side(),
+                                damage_amount,
+                                faint_context: FaintContext::move_effect(
+                                    *attacking_side_ref,
+                                    attacker_index,
+                                    FaintCause::DirectMove,
+                                    choice.move_id,
+                                ),
+                            },
+                        ));
                     defending_side.get_active().hp -= damage_amount;
                 }
             }
@@ -1297,10 +1312,18 @@ pub fn choice_special_effect(
                 if damage_amount > 0 {
                     instructions
                         .instruction_list
-                        .push(Instruction::Damage(DamageInstruction {
-                            side_ref: attacking_side_ref.get_other_side(),
-                            damage_amount: damage_amount,
-                        }));
+                        .push(Instruction::DamageWithFaintContext(
+                            DamageWithFaintContextInstruction {
+                                side_ref: attacking_side_ref.get_other_side(),
+                                damage_amount,
+                                faint_context: FaintContext::move_effect(
+                                    *attacking_side_ref,
+                                    attacker_index,
+                                    FaintCause::DirectMove,
+                                    choice.move_id,
+                                ),
+                            },
+                        ));
                     defending_side.get_active().hp -= damage_amount;
                 }
             }
@@ -1317,10 +1340,18 @@ pub fn choice_special_effect(
                 if damage_amount > 0 {
                     instructions
                         .instruction_list
-                        .push(Instruction::Damage(DamageInstruction {
-                            side_ref: attacking_side_ref.get_other_side(),
-                            damage_amount: damage_amount,
-                        }));
+                        .push(Instruction::DamageWithFaintContext(
+                            DamageWithFaintContextInstruction {
+                                side_ref: attacking_side_ref.get_other_side(),
+                                damage_amount,
+                                faint_context: FaintContext::move_effect(
+                                    *attacking_side_ref,
+                                    attacker_index,
+                                    FaintCause::DirectMove,
+                                    choice.move_id,
+                                ),
+                            },
+                        ));
                     defending_side.get_active().hp -= damage_amount;
                 }
             }
@@ -1436,7 +1467,6 @@ pub fn choice_special_effect(
             target_pkmn.hp = target_hp;
         }
         Choices::NIGHTSHADE => {
-            let (attacking_side, defending_side) = state.get_both_sides(attacking_side_ref);
             let attacker_level = attacking_side.get_active_immutable().level;
             let defender_active = defending_side.get_active();
             if type_effectiveness_modifier(&PokemonType::GHOST, &defender_active) == 0.0 {
@@ -1446,14 +1476,21 @@ pub fn choice_special_effect(
             let damage_amount = cmp::min(attacker_level as i16, defender_active.hp);
             instructions
                 .instruction_list
-                .push(Instruction::Damage(DamageInstruction {
-                    side_ref: attacking_side_ref.get_other_side(),
-                    damage_amount: damage_amount,
-                }));
+                .push(Instruction::DamageWithFaintContext(
+                    DamageWithFaintContextInstruction {
+                        side_ref: attacking_side_ref.get_other_side(),
+                        damage_amount,
+                        faint_context: FaintContext::move_effect(
+                            *attacking_side_ref,
+                            attacker_index,
+                            FaintCause::DirectMove,
+                            choice.move_id,
+                        ),
+                    },
+                ));
             defender_active.hp -= damage_amount;
         }
         Choices::SEISMICTOSS => {
-            let (attacking_side, defending_side) = state.get_both_sides(attacking_side_ref);
             let attacker_level = attacking_side.get_active_immutable().level;
             let defender_active = defending_side.get_active();
             if type_effectiveness_modifier(&PokemonType::NORMAL, &defender_active) == 0.0 {
@@ -1463,10 +1500,18 @@ pub fn choice_special_effect(
             let damage_amount = cmp::min(attacker_level as i16, defender_active.hp);
             instructions
                 .instruction_list
-                .push(Instruction::Damage(DamageInstruction {
-                    side_ref: attacking_side_ref.get_other_side(),
-                    damage_amount: damage_amount,
-                }));
+                .push(Instruction::DamageWithFaintContext(
+                    DamageWithFaintContextInstruction {
+                        side_ref: attacking_side_ref.get_other_side(),
+                        damage_amount,
+                        faint_context: FaintContext::move_effect(
+                            *attacking_side_ref,
+                            attacker_index,
+                            FaintCause::DirectMove,
+                            choice.move_id,
+                        ),
+                    },
+                ));
             defender_active.hp -= damage_amount;
         }
         Choices::ENDEAVOR => {
@@ -1483,10 +1528,18 @@ pub fn choice_special_effect(
             let damage_amount = defender.hp - attacker.hp;
             instructions
                 .instruction_list
-                .push(Instruction::Damage(DamageInstruction {
-                    side_ref: attacking_side_ref.get_other_side(),
-                    damage_amount: damage_amount,
-                }));
+                .push(Instruction::DamageWithFaintContext(
+                    DamageWithFaintContextInstruction {
+                        side_ref: attacking_side_ref.get_other_side(),
+                        damage_amount,
+                        faint_context: FaintContext::move_effect(
+                            *attacking_side_ref,
+                            attacker_index,
+                            FaintCause::DirectMove,
+                            choice.move_id,
+                        ),
+                    },
+                ));
             defender.hp -= damage_amount;
         }
         Choices::FINALGAMBIT => {
@@ -1501,19 +1554,35 @@ pub fn choice_special_effect(
             let damage_amount = attacker.hp;
             instructions
                 .instruction_list
-                .push(Instruction::Damage(DamageInstruction {
-                    side_ref: attacking_side_ref.get_other_side(),
-                    damage_amount: damage_amount,
-                }));
-            defender.hp -= damage_amount;
+                .push(Instruction::DamageWithFaintContext(
+                    DamageWithFaintContextInstruction {
+                        side_ref: *attacking_side_ref,
+                        damage_amount: damage_amount,
+                        faint_context: FaintContext::move_effect(
+                            *attacking_side_ref,
+                            attacker_index,
+                            FaintCause::SelfKoMove,
+                            choice.move_id,
+                        ),
+                    },
+                ));
+            attacker.hp = 0;
 
             instructions
                 .instruction_list
-                .push(Instruction::Damage(DamageInstruction {
-                    side_ref: *attacking_side_ref,
-                    damage_amount: attacker.hp,
-                }));
-            attacker.hp = 0;
+                .push(Instruction::DamageWithFaintContext(
+                    DamageWithFaintContextInstruction {
+                        side_ref: attacking_side_ref.get_other_side(),
+                        damage_amount: damage_amount,
+                        faint_context: FaintContext::move_effect(
+                            *attacking_side_ref,
+                            attacker_index,
+                            FaintCause::DirectMove,
+                            choice.move_id,
+                        ),
+                    },
+                ));
+            defender.hp -= damage_amount;
         }
         Choices::PAINSPLIT => {
             if !defending_side

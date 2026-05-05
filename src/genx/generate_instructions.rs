@@ -1,7 +1,7 @@
 use super::abilities::{
-    ability_after_damage_hit, ability_before_move, ability_end_of_turn,
-    ability_modify_attack_against, ability_modify_attack_being_used, ability_on_switch_in,
-    ability_on_switch_out, Abilities,
+    ability_after_damage_hit, ability_after_substitute_hit, ability_before_move,
+    ability_end_of_turn, ability_modify_attack_against, ability_modify_attack_being_used,
+    ability_on_damage_blocked, ability_on_switch_in, ability_on_switch_out, Abilities,
 };
 use super::choice_effects::{
     charge_choice_to_volatile, choice_after_damage_hit, choice_before_move, choice_hazard_clear,
@@ -15,9 +15,10 @@ use crate::instruction::{
     ApplyVolatileStatusInstruction, BoostInstruction, ChangeDamageDealtDamageInstruction,
     ChangeDamageDealtMoveCategoryInstruction, ChangeItemInstruction,
     ChangeSideConditionInstruction, ChangeTerrain, ChangeType,
-    ChangeVolatileStatusDurationInstruction, ChangeWeather, DecrementRestTurnsInstruction,
-    DecrementWishInstruction, HealInstruction, RemoveVolatileStatusInstruction,
-    SetSecondMoveSwitchOutMoveInstruction, SetSleepTurnsInstruction, ToggleBatonPassingInstruction,
+    ChangeVolatileStatusDurationInstruction, ChangeWeather, DamageWithFaintContextInstruction,
+    DecrementRestTurnsInstruction, DecrementWishInstruction, FaintCause, FaintContext, FaintEffect,
+    HealInstruction, RemoveVolatileStatusInstruction, SetSecondMoveSwitchOutMoveInstruction,
+    SetSleepTurnsInstruction, ToggleBatonPassingInstruction,
     ToggleDamageDealtHitSubstituteInstruction, ToggleMegaEvolvedInstruction,
     ToggleShedTailingInstruction, ToggleTrickRoomInstruction,
 };
@@ -486,10 +487,14 @@ fn generate_instructions_from_switch(
                     (switched_in_pkmn.maxhp as f32 * multiplier / 8.0) as i16,
                     switched_in_pkmn.hp,
                 );
-                let stealth_rock_dmg_instruction = Instruction::Damage(DamageInstruction {
-                    side_ref: switching_side_ref,
-                    damage_amount: dmg_amount,
-                });
+                let stealth_rock_dmg_instruction =
+                    Instruction::DamageWithFaintContext(DamageWithFaintContextInstruction {
+                        side_ref: switching_side_ref,
+                        damage_amount: dmg_amount,
+                        faint_context: FaintContext::residual(FaintEffect::Move(
+                            Choices::STEALTHROCK,
+                        )),
+                    });
                 switched_in_pkmn.hp -= dmg_amount;
                 incoming_instructions
                     .instruction_list
@@ -502,10 +507,12 @@ fn generate_instructions_from_switch(
                     switched_in_pkmn.maxhp * side.side_conditions.spikes as i16 / 8,
                     switched_in_pkmn.hp,
                 );
-                let spikes_dmg_instruction = Instruction::Damage(DamageInstruction {
-                    side_ref: switching_side_ref,
-                    damage_amount: dmg_amount,
-                });
+                let spikes_dmg_instruction =
+                    Instruction::DamageWithFaintContext(DamageWithFaintContextInstruction {
+                        side_ref: switching_side_ref,
+                        damage_amount: dmg_amount,
+                        faint_context: FaintContext::residual(FaintEffect::Move(Choices::SPIKES)),
+                    });
                 side.get_active().hp -= dmg_amount;
                 incoming_instructions
                     .instruction_list
@@ -1336,6 +1343,7 @@ fn check_move_hit_or_miss(
     Otherwise, update the incoming instructions' percent_hit to reflect the chance of the move hitting
     */
     let attacking_side = state.get_side(attacking_side_ref);
+    let attacking_index = attacking_side.active_index;
     let attacking_pokemon = attacking_side.get_active_immutable();
 
     let mut percent_hit =
@@ -1349,10 +1357,17 @@ fn check_move_hit_or_miss(
         move_missed_instruction.update_percentage(1.0 - percent_hit);
         if let Some(crash_fraction) = choice.crash {
             let crash_amount = (attacking_pokemon.maxhp as f32 * crash_fraction) as i16;
-            let crash_instruction = Instruction::Damage(DamageInstruction {
-                side_ref: *attacking_side_ref,
-                damage_amount: cmp::min(crash_amount, attacking_pokemon.hp),
-            });
+            let crash_instruction =
+                Instruction::DamageWithFaintContext(DamageWithFaintContextInstruction {
+                    side_ref: *attacking_side_ref,
+                    damage_amount: cmp::min(crash_amount, attacking_pokemon.hp),
+                    faint_context: FaintContext::move_effect(
+                        *attacking_side_ref,
+                        attacking_index,
+                        FaintCause::Recoil,
+                        choice.move_id,
+                    ),
+                });
 
             move_missed_instruction
                 .instruction_list
@@ -1517,16 +1532,24 @@ fn generate_instructions_from_damage(
     */
     let mut hit_sub = false;
     let attacking_side = state.get_side(attacking_side_ref);
+    let attacking_index = attacking_side.active_index;
     let attacking_pokemon = attacking_side.get_active();
 
     if calculated_damage <= 0 {
         if let Some(crash_fraction) = choice.crash {
             let crash_amount = (attacking_pokemon.maxhp as f32 * crash_fraction) as i16;
             let damage_taken = cmp::min(crash_amount, attacking_pokemon.hp);
-            let crash_instruction = Instruction::Damage(DamageInstruction {
-                side_ref: *attacking_side_ref,
-                damage_amount: damage_taken,
-            });
+            let crash_instruction =
+                Instruction::DamageWithFaintContext(DamageWithFaintContextInstruction {
+                    side_ref: *attacking_side_ref,
+                    damage_amount: damage_taken,
+                    faint_context: FaintContext::move_effect(
+                        *attacking_side_ref,
+                        attacking_index,
+                        FaintCause::Recoil,
+                        choice.move_id,
+                    ),
+                });
             attacking_pokemon.hp -= damage_taken;
             incoming_instructions
                 .instruction_list
@@ -1540,13 +1563,15 @@ fn generate_instructions_from_damage(
     if percent_hit > 0.0 {
         let should_use_damage_dealt = state.use_damage_dealt;
         let (attacking_side, defending_side) = state.get_both_sides(attacking_side_ref);
-        let attacking_pokemon = attacking_side.get_active();
+        let attacking_index = attacking_side.active_index;
+        let defending_index = defending_side.active_index;
+        let attacking_ability = attacking_side.get_active_immutable().ability;
         let mut damage_dealt;
         if defending_side
             .volatile_statuses
             .contains(&PokemonVolatileStatus::SUBSTITUTE)
             && !choice.flags.sound
-            && attacking_pokemon.ability != Abilities::INFILTRATOR
+            && attacking_ability != Abilities::INFILTRATOR
         {
             damage_dealt = cmp::min(calculated_damage, defending_side.substitute_health);
             let substitute_damage_dealt = cmp::min(calculated_damage, damage_dealt);
@@ -1569,6 +1594,16 @@ fn generate_instructions_from_damage(
                     &mut incoming_instructions,
                 );
             }
+
+            ability_after_substitute_hit(
+                attacking_side,
+                defending_side,
+                attacking_ability,
+                choice,
+                attacking_side_ref,
+                damage_dealt,
+                &mut incoming_instructions,
+            );
 
             if defending_side
                 .volatile_statuses
@@ -1594,10 +1629,20 @@ fn generate_instructions_from_damage(
                 .volatile_statuses
                 .contains(&PokemonVolatileStatus::ENDURE);
             let attacking_pokemon = attacking_side.get_active();
-            let defending_pokemon = defending_side.get_active();
             let mut knocked_out = false;
-            damage_dealt = cmp::min(calculated_damage, defending_pokemon.hp);
+            damage_dealt = cmp::min(calculated_damage, defending_side.get_active_immutable().hp);
+            if choice.damage_blocked && damage_dealt != 0 {
+                if ability_on_damage_blocked(
+                    defending_side,
+                    choice,
+                    &attacking_side_ref.get_other_side(),
+                    &mut incoming_instructions,
+                ) {
+                    damage_dealt = 0;
+                }
+            }
             if damage_dealt != 0 {
+                let defending_pokemon = defending_side.get_active();
                 if has_endure
                     || ((defending_pokemon.ability == Abilities::STURDY
                         || defending_pokemon.item == Items::FOCUSSASH)
@@ -1610,10 +1655,17 @@ fn generate_instructions_from_damage(
                     knocked_out = true;
                 }
 
-                let damage_instruction = Instruction::Damage(DamageInstruction {
-                    side_ref: attacking_side_ref.get_other_side(),
-                    damage_amount: damage_dealt,
-                });
+                let damage_instruction =
+                    Instruction::DamageWithFaintContext(DamageWithFaintContextInstruction {
+                        side_ref: attacking_side_ref.get_other_side(),
+                        damage_amount: damage_dealt,
+                        faint_context: FaintContext::move_effect(
+                            *attacking_side_ref,
+                            attacking_index,
+                            FaintCause::DirectMove,
+                            choice.move_id,
+                        ),
+                    });
                 defending_pokemon.hp -= damage_dealt;
                 incoming_instructions
                     .instruction_list
@@ -1624,10 +1676,17 @@ fn generate_instructions_from_damage(
                         .volatile_statuses
                         .contains(&PokemonVolatileStatus::DESTINYBOND)
                 {
-                    let damage_instruction = Instruction::Damage(DamageInstruction {
-                        side_ref: *attacking_side_ref,
-                        damage_amount: attacking_pokemon.hp,
-                    });
+                    let damage_instruction =
+                        Instruction::DamageWithFaintContext(DamageWithFaintContextInstruction {
+                            side_ref: *attacking_side_ref,
+                            damage_amount: attacking_pokemon.hp,
+                            faint_context: FaintContext::move_effect(
+                                attacking_side_ref.get_other_side(),
+                                defending_index,
+                                FaintCause::DestinyBond,
+                                Choices::DESTINYBOND,
+                            ),
+                        });
                     attacking_pokemon.hp = 0;
                     incoming_instructions
                         .instruction_list
@@ -1655,6 +1714,7 @@ fn generate_instructions_from_damage(
             }
         }
 
+        let attacking_index = state.get_side_immutable(attacking_side_ref).active_index;
         let attacking_pokemon = state.get_side(attacking_side_ref).get_active();
         if let Some(drain_fraction) = choice.drain {
             let drain_amount = (damage_dealt as f32 * drain_fraction) as i16;
@@ -1672,18 +1732,36 @@ fn generate_instructions_from_damage(
             }
         }
 
-        let attacking_pokemon = state.get_side(attacking_side_ref).get_active();
         if let Some(recoil_fraction) = choice.recoil {
-            let recoil_amount = (damage_dealt as f32 * recoil_fraction) as i16;
-            let damage_amount = cmp::min(recoil_amount, attacking_pokemon.hp);
-            let recoil_instruction = Instruction::Damage(DamageInstruction {
-                side_ref: *attacking_side_ref,
-                damage_amount: damage_amount,
-            });
-            attacking_pokemon.hp -= damage_amount;
-            incoming_instructions
-                .instruction_list
-                .push(recoil_instruction);
+            let defending_pokemon_has_neutralizing_gas = state
+                .get_side_immutable(&attacking_side_ref.get_other_side())
+                .get_active_immutable()
+                .ability
+                == Abilities::NEUTRALIZINGGAS;
+            let attacking_pokemon = state.get_side(attacking_side_ref).get_active();
+            let recoil_blocked_by_ability = !defending_pokemon_has_neutralizing_gas
+                && (attacking_pokemon.ability == Abilities::MAGICGUARD
+                    || (attacking_pokemon.ability == Abilities::ROCKHEAD
+                        && choice.move_id != Choices::STRUGGLE));
+            if !recoil_blocked_by_ability {
+                let recoil_amount = (damage_dealt as f32 * recoil_fraction) as i16;
+                let damage_amount = cmp::min(recoil_amount, attacking_pokemon.hp);
+                let recoil_instruction =
+                    Instruction::DamageWithFaintContext(DamageWithFaintContextInstruction {
+                        side_ref: *attacking_side_ref,
+                        damage_amount: damage_amount,
+                        faint_context: FaintContext::move_effect(
+                            *attacking_side_ref,
+                            attacking_index,
+                            FaintCause::Recoil,
+                            choice.move_id,
+                        ),
+                    });
+                attacking_pokemon.hp -= damage_amount;
+                incoming_instructions
+                    .instruction_list
+                    .push(recoil_instruction);
+            }
         }
         choice_after_damage_hit(
             &mut state,
@@ -1858,51 +1936,51 @@ fn before_move(
             if choice.crash.is_some() {
                 choice.accuracy = 0.0;
             }
-        }
 
-        if defending_side
-            .volatile_statuses
-            .contains(&PokemonVolatileStatus::SPIKYSHIELD)
-            && choice.flags.contact
-        {
-            choice.heal = Some(Heal {
-                target: MoveTarget::User,
-                amount: -0.125,
-            })
-        } else if defending_side
-            .volatile_statuses
-            .contains(&PokemonVolatileStatus::BANEFULBUNKER)
-            && choice.flags.contact
-        {
-            choice.status = Some(Status {
-                target: MoveTarget::User,
-                status: PokemonStatus::POISON,
-            })
-        } else if defending_side
-            .volatile_statuses
-            .contains(&PokemonVolatileStatus::BURNINGBULWARK)
-            && choice.flags.contact
-        {
-            choice.status = Some(Status {
-                target: MoveTarget::User,
-                status: PokemonStatus::BURN,
-            })
-        } else if defending_side
-            .volatile_statuses
-            .contains(&PokemonVolatileStatus::SILKTRAP)
-            && choice.flags.contact
-        {
-            choice.boost = Some(Boost {
-                target: MoveTarget::User,
-                boosts: StatBoosts {
-                    attack: 0,
-                    defense: 0,
-                    special_attack: 0,
-                    special_defense: 0,
-                    speed: -1,
-                    accuracy: 0,
-                },
-            })
+            if defending_side
+                .volatile_statuses
+                .contains(&PokemonVolatileStatus::SPIKYSHIELD)
+                && choice.flags.contact
+            {
+                choice.heal = Some(Heal {
+                    target: MoveTarget::User,
+                    amount: -0.125,
+                })
+            } else if defending_side
+                .volatile_statuses
+                .contains(&PokemonVolatileStatus::BANEFULBUNKER)
+                && choice.flags.contact
+            {
+                choice.status = Some(Status {
+                    target: MoveTarget::User,
+                    status: PokemonStatus::POISON,
+                })
+            } else if defending_side
+                .volatile_statuses
+                .contains(&PokemonVolatileStatus::BURNINGBULWARK)
+                && choice.flags.contact
+            {
+                choice.status = Some(Status {
+                    target: MoveTarget::User,
+                    status: PokemonStatus::BURN,
+                })
+            } else if defending_side
+                .volatile_statuses
+                .contains(&PokemonVolatileStatus::SILKTRAP)
+                && choice.flags.contact
+            {
+                choice.boost = Some(Boost {
+                    target: MoveTarget::User,
+                    boosts: StatBoosts {
+                        attack: 0,
+                        defense: 0,
+                        special_attack: 0,
+                        special_defense: 0,
+                        speed: -1,
+                        accuracy: 0,
+                    },
+                })
+            }
         }
     }
 }
@@ -2145,10 +2223,14 @@ fn generate_instructions_from_existing_status_conditions(
         }
 
         let damage_dealt = cmp::min(damage_dealt as i16, attacker_active.hp);
-        let damage_instruction = Instruction::Damage(DamageInstruction {
-            side_ref: *attacking_side_ref,
-            damage_amount: damage_dealt,
-        });
+        let damage_instruction =
+            Instruction::DamageWithFaintContext(DamageWithFaintContextInstruction {
+                side_ref: *attacking_side_ref,
+                damage_amount: damage_dealt,
+                faint_context: FaintContext::residual(FaintEffect::Volatile(
+                    PokemonVolatileStatus::CONFUSION,
+                )),
+            });
         hit_yourself_instruction
             .instruction_list
             .push(damage_instruction);
@@ -3135,10 +3217,12 @@ fn add_end_of_turn_instructions(
 
             let damage_amount =
                 cmp::min((active_pkmn.maxhp as f32 * 0.0625) as i16, active_pkmn.hp);
-            let hail_damage_instruction = Instruction::Damage(DamageInstruction {
-                side_ref: *side_ref,
-                damage_amount: damage_amount,
-            });
+            let hail_damage_instruction =
+                Instruction::DamageWithFaintContext(DamageWithFaintContextInstruction {
+                    side_ref: *side_ref,
+                    damage_amount,
+                    faint_context: FaintContext::residual(FaintEffect::Weather(Weather::HAIL)),
+                });
 
             active_pkmn.hp -= damage_amount;
             incoming_instructions
@@ -3157,10 +3241,12 @@ fn add_end_of_turn_instructions(
             }
             let damage_amount =
                 cmp::min((active_pkmn.maxhp as f32 * 0.0625) as i16, active_pkmn.hp);
-            let sand_damage_instruction = Instruction::Damage(DamageInstruction {
-                side_ref: *side_ref,
-                damage_amount: damage_amount,
-            });
+            let sand_damage_instruction =
+                Instruction::DamageWithFaintContext(DamageWithFaintContextInstruction {
+                    side_ref: *side_ref,
+                    damage_amount,
+                    faint_context: FaintContext::residual(FaintEffect::Weather(Weather::SAND)),
+                });
             active_pkmn.hp -= damage_amount;
             incoming_instructions
                 .instruction_list
@@ -3183,11 +3269,19 @@ fn add_end_of_turn_instructions(
                     &attacking_side.future_sight.1,
                 );
                 let defender = defending_side.get_active();
+                let source_index = attacking_side.future_sight.1;
                 damage = cmp::min(damage, defender.hp);
-                let future_sight_damage_instruction = Instruction::Damage(DamageInstruction {
-                    side_ref: side_ref.get_other_side(),
-                    damage_amount: damage,
-                });
+                let future_sight_damage_instruction =
+                    Instruction::DamageWithFaintContext(DamageWithFaintContextInstruction {
+                        side_ref: side_ref.get_other_side(),
+                        damage_amount: damage,
+                        faint_context: FaintContext::move_effect(
+                            *side_ref,
+                            source_index,
+                            FaintCause::DirectMove,
+                            Choices::FUTURESIGHT,
+                        ),
+                    });
                 incoming_instructions
                     .instruction_list
                     .push(future_sight_damage_instruction);
@@ -3262,10 +3356,14 @@ fn add_end_of_turn_instructions(
                     ),
                     1,
                 );
-                let burn_damage_instruction = Instruction::Damage(DamageInstruction {
-                    side_ref: *side_ref,
-                    damage_amount: damage_amount,
-                });
+                let burn_damage_instruction =
+                    Instruction::DamageWithFaintContext(DamageWithFaintContextInstruction {
+                        side_ref: *side_ref,
+                        damage_amount,
+                        faint_context: FaintContext::residual(FaintEffect::Status(
+                            PokemonStatus::BURN,
+                        )),
+                    });
                 active_pkmn.hp -= damage_amount;
                 incoming_instructions
                     .instruction_list
@@ -3277,10 +3375,14 @@ fn add_end_of_turn_instructions(
                     cmp::min((active_pkmn.maxhp as f32 * 0.125) as i16, active_pkmn.hp),
                 );
 
-                let poison_damage_instruction = Instruction::Damage(DamageInstruction {
-                    side_ref: *side_ref,
-                    damage_amount: damage_amount,
-                });
+                let poison_damage_instruction =
+                    Instruction::DamageWithFaintContext(DamageWithFaintContextInstruction {
+                        side_ref: *side_ref,
+                        damage_amount,
+                        faint_context: FaintContext::residual(FaintEffect::Status(
+                            PokemonStatus::POISON,
+                        )),
+                    });
                 active_pkmn.hp -= damage_amount;
                 incoming_instructions
                     .instruction_list
@@ -3298,10 +3400,14 @@ fn add_end_of_turn_instructions(
                         ),
                         1,
                     );
-                    let toxic_damage_instruction = Instruction::Damage(DamageInstruction {
-                        side_ref: *side_ref,
-                        damage_amount,
-                    });
+                    let toxic_damage_instruction =
+                        Instruction::DamageWithFaintContext(DamageWithFaintContextInstruction {
+                            side_ref: *side_ref,
+                            damage_amount,
+                            faint_context: FaintContext::residual(FaintEffect::Status(
+                                PokemonStatus::TOXIC,
+                            )),
+                        });
 
                     active_pkmn.hp -= damage_amount;
                     incoming_instructions
@@ -3354,10 +3460,12 @@ fn add_end_of_turn_instructions(
             }
 
             let health_sapped = cmp::min((active_pkmn.maxhp as f32 * 0.125) as i16, active_pkmn.hp);
-            let damage_ins = Instruction::Damage(DamageInstruction {
-                side_ref: *side_ref,
-                damage_amount: health_sapped,
-            });
+            let damage_ins =
+                Instruction::DamageWithFaintContext(DamageWithFaintContextInstruction {
+                    side_ref: *side_ref,
+                    damage_amount: health_sapped,
+                    faint_context: FaintContext::residual(FaintEffect::Move(Choices::LEECHSEED)),
+                });
             active_pkmn.hp -= health_sapped;
             incoming_instructions.instruction_list.push(damage_ins);
 
@@ -3530,13 +3638,22 @@ fn add_end_of_turn_instructions(
             .volatile_statuses
             .contains(&PokemonVolatileStatus::PERISH1)
         {
+            let active_index = side.active_index;
             let active_pkmn = side.get_active();
             incoming_instructions
                 .instruction_list
-                .push(Instruction::Damage(DamageInstruction {
-                    side_ref: *side_ref,
-                    damage_amount: active_pkmn.hp,
-                }));
+                .push(Instruction::DamageWithFaintContext(
+                    DamageWithFaintContextInstruction {
+                        side_ref: *side_ref,
+                        damage_amount: active_pkmn.hp,
+                        faint_context: FaintContext::move_effect(
+                            *side_ref,
+                            active_index,
+                            FaintCause::PerishSong,
+                            Choices::PERISHSONG,
+                        ),
+                    },
+                ));
             active_pkmn.hp = 0;
         }
 
@@ -3648,10 +3765,15 @@ fn add_end_of_turn_instructions(
 
             incoming_instructions
                 .instruction_list
-                .push(Instruction::Damage(DamageInstruction {
-                    side_ref: *side_ref,
-                    damage_amount,
-                }));
+                .push(Instruction::DamageWithFaintContext(
+                    DamageWithFaintContextInstruction {
+                        side_ref: *side_ref,
+                        damage_amount,
+                        faint_context: FaintContext::residual(FaintEffect::Volatile(
+                            PokemonVolatileStatus::PARTIALLYTRAPPED,
+                        )),
+                    },
+                ));
             active_pkmn.hp -= damage_amount;
         }
         if side
@@ -3669,10 +3791,13 @@ fn add_end_of_turn_instructions(
                 cmp::min((active_pkmn.maxhp as f32 / divisor) as i16, active_pkmn.hp);
             incoming_instructions
                 .instruction_list
-                .push(Instruction::Damage(DamageInstruction {
-                    side_ref: *side_ref,
-                    damage_amount: damage_amount,
-                }));
+                .push(Instruction::DamageWithFaintContext(
+                    DamageWithFaintContextInstruction {
+                        side_ref: *side_ref,
+                        damage_amount,
+                        faint_context: FaintContext::residual(FaintEffect::Move(Choices::SALTCURE)),
+                    },
+                ));
             active_pkmn.hp -= damage_amount;
         }
 
@@ -7664,6 +7789,140 @@ mod tests {
         let mut choice = MOVES.get(&Choices::BRAVEBIRD).unwrap().to_owned();
         state.side_one.get_active().hp = 105;
         state.side_one.get_active().maxhp = 105;
+
+        let mut instructions = vec![];
+        generate_instructions_from_move(
+            &mut state,
+            &mut choice,
+            &MOVES.get(&Choices::TACKLE).unwrap(),
+            SideReference::SideOne,
+            StateInstructions::default(),
+            &mut instructions,
+            false,
+        );
+
+        let expected_instructions: StateInstructions = StateInstructions {
+            percentage: 100.0,
+            instruction_list: vec![
+                Instruction::Damage(DamageInstruction {
+                    side_ref: SideReference::SideTwo,
+                    damage_amount: 94,
+                }),
+                Instruction::Damage(DamageInstruction {
+                    side_ref: SideReference::SideOne,
+                    damage_amount: 31,
+                }),
+            ],
+        };
+
+        assert_eq!(instructions, vec![expected_instructions])
+    }
+
+    #[test]
+    fn test_rockhead_blocks_recoil_damage() {
+        let mut state: State = State::default();
+        let mut choice = MOVES.get(&Choices::BRAVEBIRD).unwrap().to_owned();
+        state.side_one.get_active().ability = Abilities::ROCKHEAD;
+        state.side_one.get_active().hp = 105;
+        state.side_one.get_active().maxhp = 105;
+
+        let mut instructions = vec![];
+        generate_instructions_from_move(
+            &mut state,
+            &mut choice,
+            &MOVES.get(&Choices::TACKLE).unwrap(),
+            SideReference::SideOne,
+            StateInstructions::default(),
+            &mut instructions,
+            false,
+        );
+
+        let expected_instructions: StateInstructions = StateInstructions {
+            percentage: 100.0,
+            instruction_list: vec![Instruction::Damage(DamageInstruction {
+                side_ref: SideReference::SideTwo,
+                damage_amount: 94,
+            })],
+        };
+
+        assert_eq!(instructions, vec![expected_instructions])
+    }
+
+    #[test]
+    fn test_magicguard_blocks_recoil_damage() {
+        let mut state: State = State::default();
+        let mut choice = MOVES.get(&Choices::BRAVEBIRD).unwrap().to_owned();
+        state.side_one.get_active().ability = Abilities::MAGICGUARD;
+        state.side_one.get_active().hp = 105;
+        state.side_one.get_active().maxhp = 105;
+
+        let mut instructions = vec![];
+        generate_instructions_from_move(
+            &mut state,
+            &mut choice,
+            &MOVES.get(&Choices::TACKLE).unwrap(),
+            SideReference::SideOne,
+            StateInstructions::default(),
+            &mut instructions,
+            false,
+        );
+
+        let expected_instructions: StateInstructions = StateInstructions {
+            percentage: 100.0,
+            instruction_list: vec![Instruction::Damage(DamageInstruction {
+                side_ref: SideReference::SideTwo,
+                damage_amount: 94,
+            })],
+        };
+
+        assert_eq!(instructions, vec![expected_instructions])
+    }
+
+    #[test]
+    fn test_neutralizinggas_suppresses_rockhead_recoil_immunity() {
+        let mut state: State = State::default();
+        let mut choice = MOVES.get(&Choices::BRAVEBIRD).unwrap().to_owned();
+        state.side_one.get_active().ability = Abilities::ROCKHEAD;
+        state.side_one.get_active().hp = 105;
+        state.side_one.get_active().maxhp = 105;
+        state.side_two.get_active().ability = Abilities::NEUTRALIZINGGAS;
+
+        let mut instructions = vec![];
+        generate_instructions_from_move(
+            &mut state,
+            &mut choice,
+            &MOVES.get(&Choices::TACKLE).unwrap(),
+            SideReference::SideOne,
+            StateInstructions::default(),
+            &mut instructions,
+            false,
+        );
+
+        let expected_instructions: StateInstructions = StateInstructions {
+            percentage: 100.0,
+            instruction_list: vec![
+                Instruction::Damage(DamageInstruction {
+                    side_ref: SideReference::SideTwo,
+                    damage_amount: 94,
+                }),
+                Instruction::Damage(DamageInstruction {
+                    side_ref: SideReference::SideOne,
+                    damage_amount: 31,
+                }),
+            ],
+        };
+
+        assert_eq!(instructions, vec![expected_instructions])
+    }
+
+    #[test]
+    fn test_neutralizinggas_suppresses_magicguard_recoil_immunity() {
+        let mut state: State = State::default();
+        let mut choice = MOVES.get(&Choices::BRAVEBIRD).unwrap().to_owned();
+        state.side_one.get_active().ability = Abilities::MAGICGUARD;
+        state.side_one.get_active().hp = 105;
+        state.side_one.get_active().maxhp = 105;
+        state.side_two.get_active().ability = Abilities::NEUTRALIZINGGAS;
 
         let mut instructions = vec![];
         generate_instructions_from_move(

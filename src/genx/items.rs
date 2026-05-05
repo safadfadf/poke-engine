@@ -7,8 +7,8 @@ use crate::choices::{Choice, Choices, Effect, MoveCategory, MoveTarget, Secondar
 use crate::define_enum_with_from_str;
 use crate::engine::generate_instructions::add_remove_status_instructions;
 use crate::instruction::{
-    ChangeItemInstruction, ChangeStatusInstruction, DamageInstruction, DisableMoveInstruction,
-    HealInstruction, Instruction, StateInstructions,
+    ChangeItemInstruction, ChangeStatusInstruction, DamageWithFaintContextInstruction,
+    DisableMoveInstruction, FaintContext, HealInstruction, Instruction, StateInstructions,
 };
 use crate::pokemon::PokemonName;
 use crate::state::{
@@ -862,6 +862,7 @@ pub fn item_end_of_turn(
     instructions: &mut StateInstructions,
 ) {
     let attacking_side = state.get_side(side_ref);
+    let source_index = attacking_side.active_index;
     let active_pkmn = attacking_side.get_active();
     match active_pkmn.item {
         Items::LUMBERRY if active_pkmn.status != PokemonStatus::NONE => {
@@ -888,9 +889,14 @@ pub fn item_end_of_turn(
             } else {
                 let damage_amount =
                     cmp::min(active_pkmn.maxhp / 16, active_pkmn.maxhp - active_pkmn.hp);
-                let ins = Instruction::Damage(DamageInstruction {
+                let ins = Instruction::DamageWithFaintContext(DamageWithFaintContextInstruction {
                     side_ref: side_ref.clone(),
-                    damage_amount: damage_amount,
+                    damage_amount,
+                    faint_context: FaintContext::item_effect(
+                        side_ref.clone(),
+                        source_index,
+                        Items::BLACKSLUDGE,
+                    ),
                 });
                 active_pkmn.hp -= damage_amount;
                 instructions.instruction_list.push(ins);

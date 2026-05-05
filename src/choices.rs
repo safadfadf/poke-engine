@@ -416,7 +416,7 @@ pub static MOVES: LazyLock<HashMap<Choices, Choice>> = LazyLock::new(|| {
         Choices::ANCHORSHOT,
         Choice {
             move_id: Choices::ANCHORSHOT,
-            base_power: 80.0,
+            base_power: 90.0,
             category: MoveCategory::Physical,
             move_type: PokemonType::STEEL,
             flags: Flags {
@@ -457,7 +457,7 @@ pub static MOVES: LazyLock<HashMap<Choices, Choice>> = LazyLock::new(|| {
         Choices::APPLEACID,
         Choice {
             move_id: Choices::APPLEACID,
-            base_power: 80.0,
+            base_power: 90.0,
             category: MoveCategory::Special,
             move_type: PokemonType::GRASS,
             flags: Flags {
@@ -707,7 +707,7 @@ pub static MOVES: LazyLock<HashMap<Choices, Choice>> = LazyLock::new(|| {
         Choices::ASTRALBARRAGE,
         Choice {
             move_id: Choices::ASTRALBARRAGE,
-            base_power: 120.0,
+            base_power: 110.0,
             category: MoveCategory::Special,
             move_type: PokemonType::GHOST,
             flags: Flags {
@@ -1078,7 +1078,7 @@ pub static MOVES: LazyLock<HashMap<Choices, Choice>> = LazyLock::new(|| {
         Choices::BEAKBLAST,
         Choice {
             move_id: Choices::BEAKBLAST,
-            base_power: 100.0,
+            base_power: 120.0,
             category: MoveCategory::Physical,
             priority: -3,
             move_type: PokemonType::FLYING,
@@ -1519,7 +1519,7 @@ pub static MOVES: LazyLock<HashMap<Choices, Choice>> = LazyLock::new(|| {
         Choices::BLOODMOON,
         Choice {
             move_id: Choices::BLOODMOON,
-            base_power: 140.0,
+            base_power: 130.0,
             category: MoveCategory::Special,
             move_type: PokemonType::NORMAL,
             flags: Flags {
@@ -1588,7 +1588,7 @@ pub static MOVES: LazyLock<HashMap<Choices, Choice>> = LazyLock::new(|| {
         Choices::BOLTBEAK,
         Choice {
             move_id: Choices::BOLTBEAK,
-            base_power: 85.0,
+            base_power: 80.0,
             category: MoveCategory::Physical,
             move_type: PokemonType::ELECTRIC,
             flags: Flags {
@@ -1681,7 +1681,7 @@ pub static MOVES: LazyLock<HashMap<Choices, Choice>> = LazyLock::new(|| {
             Choice {
                 move_id: Choices::BONERUSH,
                 accuracy: 90.0,
-                base_power: 25.0,
+                base_power: 30.0,
                 category: MoveCategory::Physical,
                 move_type: PokemonType::GROUND,
                 flags: Flags {
@@ -2582,6 +2582,8 @@ pub static MOVES: LazyLock<HashMap<Choices, Choice>> = LazyLock::new(|| {
         Choices::CLANGOROUSSOUL,
         Choice {
             move_id: Choices::CLANGOROUSSOUL,
+            // Showdown uses accuracy=true for this self-target move.
+            accuracy: 999.0,
             target: MoveTarget::User,
             move_type: PokemonType::DRAGON,
             flags: Flags {
@@ -3115,7 +3117,7 @@ pub static MOVES: LazyLock<HashMap<Choices, Choice>> = LazyLock::new(|| {
             Choices::CRABHAMMER,
             Choice {
                 move_id: Choices::CRABHAMMER,
-                accuracy: 90.0,
+                accuracy: 95.0,
                 base_power: 100.0,
                 category: MoveCategory::Physical,
                 move_type: PokemonType::WATER,
@@ -4206,7 +4208,7 @@ pub static MOVES: LazyLock<HashMap<Choices, Choice>> = LazyLock::new(|| {
         Choices::DRAGONHAMMER,
         Choice {
             move_id: Choices::DRAGONHAMMER,
-            base_power: 90.0,
+            base_power: 100.0,
             category: MoveCategory::Physical,
             move_type: PokemonType::DRAGON,
             flags: Flags {
@@ -5437,7 +5439,7 @@ pub static MOVES: LazyLock<HashMap<Choices, Choice>> = LazyLock::new(|| {
         Choices::FIRELASH,
         Choice {
             move_id: Choices::FIRELASH,
-            base_power: 80.0,
+            base_power: 90.0,
             category: MoveCategory::Physical,
             move_type: PokemonType::FIRE,
             flags: Flags {
@@ -5566,7 +5568,7 @@ pub static MOVES: LazyLock<HashMap<Choices, Choice>> = LazyLock::new(|| {
         Choices::FIRSTIMPRESSION,
         Choice {
             move_id: Choices::FIRSTIMPRESSION,
-            base_power: 90.0,
+            base_power: 100.0,
             category: MoveCategory::Physical,
             priority: 2,
             move_type: PokemonType::BUG,
@@ -5582,7 +5584,7 @@ pub static MOVES: LazyLock<HashMap<Choices, Choice>> = LazyLock::new(|| {
         Choices::FISHIOUSREND,
         Choice {
             move_id: Choices::FISHIOUSREND,
-            base_power: 85.0,
+            base_power: 80.0,
             category: MoveCategory::Physical,
             move_type: PokemonType::WATER,
             flags: Flags {
@@ -6155,11 +6157,6 @@ pub static MOVES: LazyLock<HashMap<Choices, Choice>> = LazyLock::new(|| {
                 protect: true,
                 ..Default::default()
             },
-            secondaries: Some(vec![Secondary {
-                chance: 10.0,
-                target: MoveTarget::Opponent,
-                effect: Effect::Status(PokemonStatus::FREEZE),
-            }]),
             ..Default::default()
         },
     );
@@ -6472,8 +6469,8 @@ pub static MOVES: LazyLock<HashMap<Choices, Choice>> = LazyLock::new(|| {
         Choices::GEARGRIND,
         Choice {
             move_id: Choices::GEARGRIND,
-            accuracy: 85.0,
-            base_power: 50.0,
+            accuracy: 90.0,
+            base_power: 60.0,
             category: MoveCategory::Physical,
             move_type: PokemonType::STEEL,
             flags: Flags {
@@ -6858,7 +6855,7 @@ pub static MOVES: LazyLock<HashMap<Choices, Choice>> = LazyLock::new(|| {
         Choices::GRAVAPPLE,
         Choice {
             move_id: Choices::GRAVAPPLE,
-            base_power: 80.0,
+            base_power: 90.0,
             category: MoveCategory::Physical,
             move_type: PokemonType::GRASS,
             flags: Flags {
@@ -8337,7 +8334,7 @@ pub static MOVES: LazyLock<HashMap<Choices, Choice>> = LazyLock::new(|| {
         Choices::HYPERDRILL,
         Choice {
             move_id: Choices::HYPERDRILL,
-            base_power: 100.0,
+            base_power: 120.0,
             category: MoveCategory::Physical,
             move_type: PokemonType::NORMAL,
             flags: Flags {
@@ -8770,7 +8767,7 @@ pub static MOVES: LazyLock<HashMap<Choices, Choice>> = LazyLock::new(|| {
         Choices::INFERNALPARADE,
         Choice {
             move_id: Choices::INFERNALPARADE,
-            base_power: 60.0,
+            base_power: 65.0,
             category: MoveCategory::Special,
             move_type: PokemonType::GHOST,
             flags: Flags {
@@ -8900,7 +8897,7 @@ pub static MOVES: LazyLock<HashMap<Choices, Choice>> = LazyLock::new(|| {
                 ..Default::default()
             },
             secondaries: Some(vec![Secondary {
-                chance: 30.0,
+                chance: 20.0,
                 target: MoveTarget::Opponent,
                 effect: Effect::VolatileStatus(PokemonVolatileStatus::FLINCH),
             }]),
@@ -10178,6 +10175,7 @@ pub static MOVES: LazyLock<HashMap<Choices, Choice>> = LazyLock::new(|| {
         Choices::MAKEITRAIN,
         Choice {
             move_id: Choices::MAKEITRAIN,
+            accuracy: 95.0,
             base_power: 120.0,
             category: MoveCategory::Special,
             move_type: PokemonType::STEEL,
@@ -10847,7 +10845,7 @@ pub static MOVES: LazyLock<HashMap<Choices, Choice>> = LazyLock::new(|| {
                 ..Default::default()
             },
             secondaries: Some(vec![Secondary {
-                chance: 30.0,
+                chance: 10.0,
                 target: MoveTarget::Opponent,
                 effect: Effect::Boost(StatBoosts {
                     attack: 0,
@@ -10934,7 +10932,7 @@ pub static MOVES: LazyLock<HashMap<Choices, Choice>> = LazyLock::new(|| {
         Choice {
             move_id: Choices::MOUNTAINGALE,
             accuracy: 85.0,
-            base_power: 100.0,
+            base_power: 120.0,
             category: MoveCategory::Physical,
             move_type: PokemonType::ICE,
             flags: Flags {
@@ -11310,7 +11308,7 @@ pub static MOVES: LazyLock<HashMap<Choices, Choice>> = LazyLock::new(|| {
         Choice {
             move_id: Choices::NIGHTDAZE,
             accuracy: 95.0,
-            base_power: 85.0,
+            base_power: 90.0,
             category: MoveCategory::Special,
             move_type: PokemonType::DARK,
             flags: Flags {
@@ -12923,7 +12921,7 @@ pub static MOVES: LazyLock<HashMap<Choices, Choice>> = LazyLock::new(|| {
         Choice {
             move_id: Choices::PSYSHIELDBASH,
             accuracy: 90.0,
-            base_power: 70.0,
+            base_power: 90.0,
             category: MoveCategory::Physical,
             move_type: PokemonType::PSYCHIC,
             flags: Flags {
@@ -13525,7 +13523,7 @@ pub static MOVES: LazyLock<HashMap<Choices, Choice>> = LazyLock::new(|| {
         Choices::REVELATIONDANCE,
         Choice {
             move_id: Choices::REVELATIONDANCE,
-            base_power: 90.0,
+            base_power: 100.0,
             category: MoveCategory::Special,
             move_type: PokemonType::NORMAL,
             flags: Flags {
@@ -15435,7 +15433,7 @@ pub static MOVES: LazyLock<HashMap<Choices, Choice>> = LazyLock::new(|| {
             move_id: Choices::SNAPTRAP,
             base_power: 35.0,
             category: MoveCategory::Physical,
-            move_type: PokemonType::GRASS,
+            move_type: PokemonType::STEEL,
             flags: Flags {
                 contact: true,
                 protect: true,
@@ -15497,7 +15495,7 @@ pub static MOVES: LazyLock<HashMap<Choices, Choice>> = LazyLock::new(|| {
         Choices::SNIPESHOT,
         Choice {
             move_id: Choices::SNIPESHOT,
-            base_power: 80.0,
+            base_power: 85.0,
             category: MoveCategory::Special,
             move_type: PokemonType::WATER,
             flags: Flags {
@@ -15880,7 +15878,7 @@ pub static MOVES: LazyLock<HashMap<Choices, Choice>> = LazyLock::new(|| {
         Choices::SPIRITSHACKLE,
         Choice {
             move_id: Choices::SPIRITSHACKLE,
-            base_power: 80.0,
+            base_power: 90.0,
             category: MoveCategory::Physical,
             move_type: PokemonType::GHOST,
             flags: Flags {
@@ -16922,7 +16920,7 @@ pub static MOVES: LazyLock<HashMap<Choices, Choice>> = LazyLock::new(|| {
         Choices::SYRUPBOMB,
         Choice {
             move_id: Choices::SYRUPBOMB,
-            accuracy: 85.0,
+            accuracy: 90.0,
             base_power: 60.0,
             category: MoveCategory::Special,
             move_type: PokemonType::GRASS,
@@ -17953,7 +17951,7 @@ pub static MOVES: LazyLock<HashMap<Choices, Choice>> = LazyLock::new(|| {
                     defense: 0,
                     special_attack: 0,
                     special_defense: 0,
-                    speed: -1,
+                    speed: -2,
                     accuracy: 0,
                 },
             }),
@@ -18139,7 +18137,7 @@ pub static MOVES: LazyLock<HashMap<Choices, Choice>> = LazyLock::new(|| {
         Choice {
             move_id: Choices::TRIPLEDIVE,
             accuracy: 95.0,
-            base_power: 30.0,
+            base_power: 35.0,
             category: MoveCategory::Physical,
             move_type: PokemonType::WATER,
             flags: Flags {
@@ -18170,7 +18168,7 @@ pub static MOVES: LazyLock<HashMap<Choices, Choice>> = LazyLock::new(|| {
         Choices::TROPKICK,
         Choice {
             move_id: Choices::TROPKICK,
-            base_power: 70.0,
+            base_power: 85.0,
             category: MoveCategory::Physical,
             move_type: PokemonType::GRASS,
             flags: Flags {
@@ -20513,6 +20511,7 @@ pub struct Choice {
     pub bypasses_protect: bool,
     pub protect_bypass_damage_multiplier: f32,
     pub protected_damage_multiplier: f32,
+    pub damage_blocked: bool,
 
     pub target: MoveTarget,
 
@@ -20647,6 +20646,7 @@ impl Default for Choice {
             bypasses_protect: false,
             protect_bypass_damage_multiplier: 1.0,
             protected_damage_multiplier: 1.0,
+            damage_blocked: false,
             target: MoveTarget::Opponent,
             first_move: true,
             sleep_talk_move: false,

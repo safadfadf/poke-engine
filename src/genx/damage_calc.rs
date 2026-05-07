@@ -687,8 +687,21 @@ fn screen_damage_modifier(
     }
 }
 
-fn apply_showdown_damage_order(
-    mut damage: f32,
+#[derive(Clone, Copy)]
+struct ShowdownDamageModifiers {
+    protected: f32,
+    terrain: f32,
+    volatile_status: f32,
+    weather: f32,
+    stab: f32,
+    type_effectiveness: f32,
+    burn: f32,
+    screen: f32,
+    final_damage: f32,
+    sniper: bool,
+}
+
+fn showdown_damage_modifiers(
     attacking_side: &Side,
     attacker: &Pokemon,
     defending_side: &Side,
@@ -700,54 +713,62 @@ fn apply_showdown_damage_order(
     attacking_ability: Abilities,
     defending_ability: Abilities,
     choice: &Choice,
-    damage_rolls: DamageRolls,
-    crit: bool,
-) -> f32 {
-    damage = damage.floor() + 2.0;
-    damage = apply_damage_modifier(damage, choice.protected_damage_multiplier);
-    damage = apply_damage_modifier(
-        damage,
-        terrain_modifier(
+) -> ShowdownDamageModifiers {
+    ShowdownDamageModifiers {
+        protected: choice.protected_damage_multiplier,
+        terrain: terrain_modifier(
             active_terrain,
             attacker_is_grounded,
             defender_is_grounded,
             choice,
         ),
-    );
-    damage = apply_damage_modifier(
-        damage,
-        volatile_status_modifier(
+        volatile_status: volatile_status_modifier(
             choice,
             attacking_side,
             defending_side,
             attacking_ability,
             defending_ability,
         ),
-    );
-    damage = apply_damage_modifier(
-        damage,
-        weather_modifier(&choice.move_type, attacker_weather),
-    );
+        weather: weather_modifier(&choice.move_type, attacker_weather),
+        stab: stab_modifier(&choice.move_type, attacker),
+        type_effectiveness: type_effectiveness_modifier_for_damage(
+            defending_side,
+            defender,
+            attacking_ability,
+            choice,
+        ),
+        burn: burn_modifier(&choice.category, &attacker.status),
+        screen: screen_damage_modifier(defending_side, attacking_ability, choice),
+        final_damage: choice.final_damage_modifier,
+        sniper: attacking_ability == Abilities::SNIPER,
+    }
+}
+
+fn apply_showdown_damage_order(
+    mut damage: f32,
+    modifiers: &ShowdownDamageModifiers,
+    damage_rolls: DamageRolls,
+    crit: bool,
+) -> f32 {
+    damage = damage.floor() + 2.0;
+    damage = apply_damage_modifier(damage, modifiers.protected);
+    damage = apply_damage_modifier(damage, modifiers.terrain);
+    damage = apply_damage_modifier(damage, modifiers.volatile_status);
+    damage = apply_damage_modifier(damage, modifiers.weather);
 
     if crit {
         damage = (damage.floor() * CRIT_MULTIPLIER).floor();
-        if attacking_ability == Abilities::SNIPER {
+        if modifiers.sniper {
             damage = apply_damage_modifier(damage, 1.5);
         }
     }
 
     damage = apply_damage_roll(damage, damage_rolls);
-    damage = apply_damage_modifier(damage, stab_modifier(&choice.move_type, attacker));
-    damage = apply_type_damage_modifier(
-        damage,
-        type_effectiveness_modifier_for_damage(defending_side, defender, attacking_ability, choice),
-    );
-    damage = apply_damage_modifier(damage, burn_modifier(&choice.category, &attacker.status));
-    damage = apply_damage_modifier(
-        damage,
-        screen_damage_modifier(defending_side, attacking_ability, choice),
-    );
-    damage = apply_damage_modifier(damage, choice.final_damage_modifier);
+    damage = apply_damage_modifier(damage, modifiers.stab);
+    damage = apply_type_damage_modifier(damage, modifiers.type_effectiveness);
+    damage = apply_damage_modifier(damage, modifiers.burn);
+    damage = apply_damage_modifier(damage, modifiers.screen);
+    damage = apply_damage_modifier(damage, modifiers.final_damage);
 
     damage.floor()
 }
@@ -799,8 +820,7 @@ pub fn calculate_damage(
     let crit_damage =
         common_pkmn_base_damage(attacker, crit_attacking_stat, crit_defending_stat, choice);
 
-    let damage = apply_showdown_damage_order(
-        damage,
+    let modifiers = showdown_damage_modifiers(
         attacking_side,
         attacker,
         defending_side,
@@ -812,25 +832,10 @@ pub fn calculate_damage(
         attacking_ability,
         defending_ability,
         choice,
-        _damage_rolls,
-        false,
     );
-    let crit_damage = apply_showdown_damage_order(
-        crit_damage,
-        attacking_side,
-        attacker,
-        defending_side,
-        defender,
-        &attacker_weather,
-        &active_terrain,
-        attacker_is_grounded,
-        defender_is_grounded,
-        attacking_ability,
-        defending_ability,
-        choice,
-        _damage_rolls,
-        true,
-    );
+
+    let damage = apply_showdown_damage_order(damage, &modifiers, _damage_rolls, false);
+    let crit_damage = apply_showdown_damage_order(crit_damage, &modifiers, _damage_rolls, true);
 
     Some((damage as i16, crit_damage as i16))
 }
@@ -853,14 +858,9 @@ pub fn calculate_futuresight_damage(
     let defending_ability = state.active_ability(&defending_side_ref);
     let attacker_weather = Weather::NONE;
     let active_terrain = Terrain::NONE;
-    let mut damage = common_pkmn_base_damage(
-        attacker,
-        attacking_stat,
-        defending_stat,
-        MOVES.get(&Choices::FUTURESIGHT).unwrap(),
-    );
-    damage = apply_showdown_damage_order(
-        damage,
+    let choice = MOVES.get(&Choices::FUTURESIGHT).unwrap();
+    let mut damage = common_pkmn_base_damage(attacker, attacking_stat, defending_stat, choice);
+    let modifiers = showdown_damage_modifiers(
         attacking_side,
         attacker,
         defending_side,
@@ -871,10 +871,9 @@ pub fn calculate_futuresight_damage(
         false,
         attacking_ability,
         defending_ability,
-        MOVES.get(&Choices::FUTURESIGHT).unwrap(),
-        DamageRolls::Average,
-        false,
+        choice,
     );
+    damage = apply_showdown_damage_order(damage, &modifiers, DamageRolls::Average, false);
 
     damage as i16
 }

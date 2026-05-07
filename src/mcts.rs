@@ -8,6 +8,9 @@ use rand::rng;
 use std::thread;
 use std::time::{Duration, Instant};
 
+#[path = "mcts_shared_tree/mod.rs"]
+mod mcts_shared_tree;
+
 const MCTS_MAX_ITERATIONS_PER_TREE: u32 = 10_000_000;
 const MCTS_DEADLINE_CHECK_INTERVAL: u32 = 128;
 const MCTS_THREADS_ENV: &str = "POKE_ENGINE_MCTS_THREADS";
@@ -485,6 +488,16 @@ pub fn perform_mcts(
 ) -> MctsResult {
     let worker_count = mcts_worker_count();
     let root_eval = evaluate(state);
+    if mcts_shared_tree::shared_tree_enabled() {
+        return mcts_shared_tree::perform_mcts_shared_tree(
+            state,
+            side_one_options,
+            side_two_options,
+            max_time,
+            root_eval,
+        );
+    }
+
     let deadline = Instant::now() + max_time;
     let max_iterations_per_worker = MCTS_MAX_ITERATIONS_PER_TREE.div_ceil(worker_count as u32);
 

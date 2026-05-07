@@ -3,9 +3,9 @@
 use poke_engine::choices::Choices;
 use poke_engine::engine::generate_instructions::generate_instructions_from_move_pair;
 use poke_engine::instruction::{
-    ApplyVolatileStatusInstruction, DamageInstruction, Instruction,
-    RemoveVolatileStatusInstruction, SetLastUsedMoveInstruction, StateInstructions,
-    SwitchInstruction,
+    ApplyVolatileStatusInstruction, DamageInstruction, DamageWithFaintContextInstruction,
+    FaintCause, FaintContext, Instruction, RemoveVolatileStatusInstruction,
+    SetLastUsedMoveInstruction, StateInstructions, SwitchInstruction,
 };
 
 #[cfg(not(feature = "terastallization"))]
@@ -786,18 +786,30 @@ fn test_firstimpression_first_turn_switched_in() {
                 last_used_move: LastUsedMove::Move(PokemonMoveIndex::M0),
                 previous_last_used_move: LastUsedMove::Switch(PokemonIndex::P0),
             }),
-            Instruction::Damage(DamageInstruction {
+            Instruction::DamageWithFaintContext(DamageWithFaintContextInstruction {
                 side_ref: SideReference::SideTwo,
-                damage_amount: 71,
+                damage_amount: 79,
+                faint_context: FaintContext::move_effect(
+                    SideReference::SideOne,
+                    PokemonIndex::P0,
+                    FaintCause::DirectMove,
+                    Choices::FIRSTIMPRESSION,
+                ),
             }),
             Instruction::SetLastUsedMove(SetLastUsedMoveInstruction {
                 side_ref: SideReference::SideTwo,
                 previous_last_used_move: LastUsedMove::None,
                 last_used_move: LastUsedMove::Move(PokemonMoveIndex::M0),
             }),
-            Instruction::Damage(DamageInstruction {
+            Instruction::DamageWithFaintContext(DamageWithFaintContextInstruction {
                 side_ref: SideReference::SideOne,
                 damage_amount: 48,
+                faint_context: FaintContext::move_effect(
+                    SideReference::SideTwo,
+                    PokemonIndex::P0,
+                    FaintCause::DirectMove,
+                    Choices::TACKLE,
+                ),
             }),
         ],
     }];

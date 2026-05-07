@@ -8,10 +8,14 @@ use rand::rng;
 use std::thread;
 use std::time::{Duration, Instant};
 
+#[path = "mcts_shared_tree/mod.rs"]
+mod mcts_shared_tree;
+
 const MCTS_MAX_ITERATIONS_PER_TREE: u32 = 10_000_000;
-const MCTS_DEADLINE_CHECK_INTERVAL: u32 = 128;
+const MCTS_DEADLINE_CHECK_INTERVAL: u32 = 1024;
 const MCTS_THREADS_ENV: &str = "POKE_ENGINE_MCTS_THREADS";
 const MCTS_SYNC_TREE_DROP_ENV: &str = "POKE_ENGINE_MCTS_SYNC_TREE_DROP";
+const MCTS_DAMAGE_BRANCH_DEPTH: u8 = 3;
 
 fn sigmoid(x: f32) -> f32 {
     // Tuned so that ~200 points is very close to 1.0
@@ -29,6 +33,7 @@ pub struct Node {
     pub instructions: StateInstructions,
     pub s1_choice: u8,
     pub s2_choice: u8,
+    pub depth: u8,
 
     // represents the total score and number of visits for this node
     // de-coupled for s1 and s2
@@ -82,6 +87,7 @@ impl Node {
             children: None,
             s1_choice: 0,
             s2_choice: 0,
+            depth: 0,
             s1_options: None,
             s2_options: None,
         }
@@ -180,7 +186,7 @@ impl Node {
         {
             return self as *mut Node;
         }
-        let should_branch_on_damage = self.root || (*self.parent).root;
+        let should_branch_on_damage = self.depth < MCTS_DAMAGE_BRANCH_DEPTH;
         let mut new_instructions =
             generate_instructions_from_move_pair(state, s1_move, s2_move, should_branch_on_damage);
         let mut this_pair_vec = Vec::with_capacity(new_instructions.len());
@@ -190,6 +196,7 @@ impl Node {
             new_node.instructions = state_instructions;
             new_node.s1_choice = s1_move_index as u8;
             new_node.s2_choice = s2_move_index as u8;
+            new_node.depth = self.depth.saturating_add(1);
 
             this_pair_vec.push(new_node);
         }
@@ -340,15 +347,12 @@ fn mcts_worker_count() -> usize {
         .map(|parallelism| parallelism.get())
         .unwrap_or(1);
 
-    // Root-parallel MCTS builds independent trees and merges only root stats.
-    // That is faster, but it is not equivalent to the legacy single-tree search,
-    // so keep it opt-in for callers that prefer speed over identical policy.
     std::env::var(MCTS_THREADS_ENV)
         .ok()
         .and_then(|value| value.parse::<usize>().ok())
         .filter(|value| *value > 0)
         .map(|value| value.min(available_parallelism))
-        .unwrap_or(1)
+        .unwrap_or_else(|| available_parallelism.min(32))
         .max(1)
 }
 
@@ -481,6 +485,16 @@ pub fn perform_mcts(
 ) -> MctsResult {
     let worker_count = mcts_worker_count();
     let root_eval = evaluate(state);
+    if mcts_shared_tree::shared_tree_enabled() {
+        return mcts_shared_tree::perform_mcts_shared_tree(
+            state,
+            side_one_options,
+            side_two_options,
+            max_time,
+            root_eval,
+        );
+    }
+
     let deadline = Instant::now() + max_time;
     let max_iterations_per_worker = MCTS_MAX_ITERATIONS_PER_TREE.div_ceil(worker_count as u32);
 

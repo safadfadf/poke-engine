@@ -180,6 +180,8 @@ define_enum_with_from_str! {
         UNBURDEN,
         UPROAR,
         YAWN,
+        PROTOSYNTHESISBOOSTER,
+        QUARKDRIVEBOOSTER,
     },
     default = NONE
 }

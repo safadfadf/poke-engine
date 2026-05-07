@@ -80,6 +80,7 @@ impl Into<State> for PyState {
                 active: self.trick_room,
                 turns_remaining: self.trick_room_turns_remaining,
             },
+            faint_events: Vec::new(),
             team_preview: self.team_preview,
             use_last_used_move: false,
             use_damage_dealt: false,
@@ -685,6 +686,8 @@ impl Into<Pokemon> for PyPokemon {
             terastallized: self.terastallized,
             tera_type: PokemonType::from_str(&self.tera_type).unwrap(),
             mega_evolved: self.mega_evolved,
+            sword_boost_used: false,
+            shield_boost_used: false,
             moves: PokemonMoves {
                 m0: moves_vec[0].clone().into(),
                 m1: moves_vec[1].clone().into(),

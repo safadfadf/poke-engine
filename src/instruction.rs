@@ -1,4 +1,5 @@
 use crate::choices::{Choices, MoveCategory};
+use crate::engine::abilities::Abilities;
 use crate::engine::items::Items;
 use crate::engine::state::{PokemonVolatileStatus, Terrain, Weather};
 use crate::state::{
@@ -40,7 +41,7 @@ impl StateInstructions {
 }
 
 // https://stackoverflow.com/questions/50686411/whats-the-usual-way-to-create-a-vector-of-different-structs
-#[derive(PartialEq, Clone)]
+#[derive(Clone)]
 pub enum Instruction {
     Switch(SwitchInstruction),
     ApplyVolatileStatus(ApplyVolatileStatusInstruction),
@@ -48,6 +49,7 @@ pub enum Instruction {
     ChangeStatus(ChangeStatusInstruction),
     Heal(HealInstruction),
     Damage(DamageInstruction),
+    DamageWithFaintContext(DamageWithFaintContextInstruction),
     Boost(BoostInstruction),
     ChangeSideCondition(ChangeSideConditionInstruction),
     ChangeVolatileStatusDuration(ChangeVolatileStatusDurationInstruction),
@@ -92,7 +94,75 @@ pub enum Instruction {
     ToggleSideTwoForceSwitch,
     ToggleTerastallized(ToggleTerastallizedInstruction),
     ToggleMegaEvolved(ToggleMegaEvolvedInstruction),
+    ToggleSwordBoostUsed(ToggleAbilityOnStartFlagInstruction),
+    ToggleShieldBoostUsed(ToggleAbilityOnStartFlagInstruction),
     TeamPreview(TeamPreviewInstruction),
+}
+
+impl PartialEq for Instruction {
+    fn eq(&self, other: &Self) -> bool {
+        use Instruction::*;
+        match (self, other) {
+            (Switch(a), Switch(b)) => a == b,
+            (ApplyVolatileStatus(a), ApplyVolatileStatus(b)) => a == b,
+            (RemoveVolatileStatus(a), RemoveVolatileStatus(b)) => a == b,
+            (ChangeStatus(a), ChangeStatus(b)) => a == b,
+            (Heal(a), Heal(b)) => a == b,
+            (Damage(a), Damage(b)) => a == b,
+            (DamageWithFaintContext(a), DamageWithFaintContext(b)) => a == b,
+            (Damage(a), DamageWithFaintContext(b)) | (DamageWithFaintContext(b), Damage(a)) => {
+                a.side_ref == b.side_ref && a.damage_amount == b.damage_amount
+            }
+            (Boost(a), Boost(b)) => a == b,
+            (ChangeSideCondition(a), ChangeSideCondition(b)) => a == b,
+            (ChangeVolatileStatusDuration(a), ChangeVolatileStatusDuration(b)) => a == b,
+            (ChangeWeather(a), ChangeWeather(b)) => a == b,
+            (DecrementWeatherTurnsRemaining, DecrementWeatherTurnsRemaining) => true,
+            (ChangeTerrain(a), ChangeTerrain(b)) => a == b,
+            (DecrementTerrainTurnsRemaining, DecrementTerrainTurnsRemaining) => true,
+            (ChangeType(a), ChangeType(b)) => a == b,
+            (ChangeAbility(a), ChangeAbility(b)) => a == b,
+            (ChangeBaseAbility(a), ChangeBaseAbility(b)) => a == b,
+            (ChangeItem(a), ChangeItem(b)) => a == b,
+            (ChangeAttack(a), ChangeAttack(b)) => a == b,
+            (ChangeDefense(a), ChangeDefense(b)) => a == b,
+            (ChangeSpecialAttack(a), ChangeSpecialAttack(b)) => a == b,
+            (ChangeSpecialDefense(a), ChangeSpecialDefense(b)) => a == b,
+            (ChangeSpeed(a), ChangeSpeed(b)) => a == b,
+            (DisableMove(a), DisableMove(b)) => a == b,
+            (EnableMove(a), EnableMove(b)) => a == b,
+            (ChangeWish(a), ChangeWish(b)) => a == b,
+            (DecrementWish(a), DecrementWish(b)) => a == b,
+            (SetFutureSight(a), SetFutureSight(b)) => a == b,
+            (DecrementFutureSight(a), DecrementFutureSight(b)) => a == b,
+            (DamageSubstitute(a), DamageSubstitute(b)) => a == b,
+            (DecrementRestTurns(a), DecrementRestTurns(b)) => a == b,
+            (SetRestTurns(a), SetRestTurns(b)) => a == b,
+            (SetSleepTurns(a), SetSleepTurns(b)) => a == b,
+            (SetFreezeTurns(a), SetFreezeTurns(b)) => a == b,
+            (ChangeSubstituteHealth(a), ChangeSubstituteHealth(b)) => a == b,
+            (FormeChange(a), FormeChange(b)) => a == b,
+            (SetSideOneMoveSecondSwitchOutMove(a), SetSideOneMoveSecondSwitchOutMove(b)) => a == b,
+            (SetSideTwoMoveSecondSwitchOutMove(a), SetSideTwoMoveSecondSwitchOutMove(b)) => a == b,
+            (ToggleBatonPassing(a), ToggleBatonPassing(b)) => a == b,
+            (ToggleShedTailing(a), ToggleShedTailing(b)) => a == b,
+            (SetLastUsedMove(a), SetLastUsedMove(b)) => a == b,
+            (ChangeDamageDealtDamage(a), ChangeDamageDealtDamage(b)) => a == b,
+            (ChangeDamageDealtMoveCatagory(a), ChangeDamageDealtMoveCatagory(b)) => a == b,
+            (ToggleDamageDealtHitSubstitute(a), ToggleDamageDealtHitSubstitute(b)) => a == b,
+            (DecrementPP(a), DecrementPP(b)) => a == b,
+            (ToggleTrickRoom(a), ToggleTrickRoom(b)) => a == b,
+            (DecrementTrickRoomTurnsRemaining, DecrementTrickRoomTurnsRemaining) => true,
+            (ToggleSideOneForceSwitch, ToggleSideOneForceSwitch) => true,
+            (ToggleSideTwoForceSwitch, ToggleSideTwoForceSwitch) => true,
+            (ToggleTerastallized(a), ToggleTerastallized(b)) => a == b,
+            (ToggleMegaEvolved(a), ToggleMegaEvolved(b)) => a == b,
+            (ToggleSwordBoostUsed(a), ToggleSwordBoostUsed(b)) => a == b,
+            (ToggleShieldBoostUsed(a), ToggleShieldBoostUsed(b)) => a == b,
+            (TeamPreview(a), TeamPreview(b)) => a == b,
+            _ => false,
+        }
+    }
 }
 
 impl fmt::Debug for Instruction {
@@ -131,6 +201,13 @@ impl fmt::Debug for Instruction {
             }
             Instruction::Damage(d) => {
                 write!(f, "Damage {:?}: {}", d.side_ref, d.damage_amount)
+            }
+            Instruction::DamageWithFaintContext(d) => {
+                write!(
+                    f,
+                    "Damage {:?}: {} ({:?})",
+                    d.side_ref, d.damage_amount, d.faint_context
+                )
             }
             Instruction::Boost(b) => {
                 write!(f, "Boost {:?} {:?}: {:?}", b.side_ref, b.stat, b.amount)
@@ -304,6 +381,20 @@ impl fmt::Debug for Instruction {
                 write!(
                     f,
                     "ToggleMegaEvolved {:?}: {:?}",
+                    s.side_ref, s.pokemon_index
+                )
+            }
+            Instruction::ToggleSwordBoostUsed(s) => {
+                write!(
+                    f,
+                    "ToggleSwordBoostUsed {:?}: {:?}",
+                    s.side_ref, s.pokemon_index
+                )
+            }
+            Instruction::ToggleShieldBoostUsed(s) => {
+                write!(
+                    f,
+                    "ToggleShieldBoostUsed {:?}: {:?}",
                     s.side_ref, s.pokemon_index
                 )
             }
@@ -489,6 +580,121 @@ pub struct DamageInstruction {
     pub damage_amount: i16,
 }
 
+#[derive(Debug, PartialEq, Eq, Copy, Clone)]
+pub enum FaintCause {
+    Unknown,
+    DirectMove,
+    DestinyBond,
+    Recoil,
+    SelfKoMove,
+    PerishSong,
+    Residual,
+    Ability,
+    Item,
+}
+
+#[derive(Debug, PartialEq, Copy, Clone)]
+pub enum FaintEffect {
+    None,
+    Move(Choices),
+    Ability(Abilities),
+    Item(Items),
+    Status(PokemonStatus),
+    Weather(Weather),
+    Volatile(PokemonVolatileStatus),
+}
+
+#[derive(Debug, PartialEq, Copy, Clone)]
+pub struct FaintContext {
+    pub source_side: Option<SideReference>,
+    pub source_index: Option<PokemonIndex>,
+    pub cause: FaintCause,
+    pub effect: FaintEffect,
+}
+
+impl FaintContext {
+    pub fn unknown() -> FaintContext {
+        FaintContext {
+            source_side: None,
+            source_index: None,
+            cause: FaintCause::Unknown,
+            effect: FaintEffect::None,
+        }
+    }
+
+    pub fn move_effect(
+        source_side: SideReference,
+        source_index: PokemonIndex,
+        cause: FaintCause,
+        move_id: Choices,
+    ) -> FaintContext {
+        FaintContext {
+            source_side: Some(source_side),
+            source_index: Some(source_index),
+            cause,
+            effect: FaintEffect::Move(move_id),
+        }
+    }
+
+    pub fn residual(effect: FaintEffect) -> FaintContext {
+        FaintContext {
+            source_side: None,
+            source_index: None,
+            cause: FaintCause::Residual,
+            effect,
+        }
+    }
+
+    pub fn ability_effect(
+        source_side: SideReference,
+        source_index: PokemonIndex,
+        ability: Abilities,
+    ) -> FaintContext {
+        FaintContext {
+            source_side: Some(source_side),
+            source_index: Some(source_index),
+            cause: FaintCause::Ability,
+            effect: FaintEffect::Ability(ability),
+        }
+    }
+
+    pub fn item_effect(
+        source_side: SideReference,
+        source_index: PokemonIndex,
+        item: Items,
+    ) -> FaintContext {
+        FaintContext {
+            source_side: Some(source_side),
+            source_index: Some(source_index),
+            cause: FaintCause::Item,
+            effect: FaintEffect::Item(item),
+        }
+    }
+}
+
+impl Default for FaintContext {
+    fn default() -> FaintContext {
+        FaintContext::unknown()
+    }
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub struct DamageWithFaintContextInstruction {
+    pub side_ref: SideReference,
+    pub damage_amount: i16,
+    pub faint_context: FaintContext,
+}
+
+#[derive(Debug, PartialEq, Copy, Clone)]
+pub struct FaintEvent {
+    pub target_side: SideReference,
+    pub target_index: PokemonIndex,
+    pub source_side: Option<SideReference>,
+    pub source_index: Option<PokemonIndex>,
+    pub cause: FaintCause,
+    pub effect: FaintEffect,
+}
+
 #[derive(Debug, PartialEq, Clone)]
 pub struct ChangeSubsituteHealthInstruction {
     pub side_ref: SideReference,
@@ -594,6 +800,12 @@ pub struct ToggleTerastallizedInstruction {
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct ToggleMegaEvolvedInstruction {
+    pub side_ref: SideReference,
+    pub pokemon_index: PokemonIndex,
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub struct ToggleAbilityOnStartFlagInstruction {
     pub side_ref: SideReference,
     pub pokemon_index: PokemonIndex,
 }

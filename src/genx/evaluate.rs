@@ -2,7 +2,7 @@ use super::abilities::Abilities;
 use super::items::Items;
 use super::state::PokemonVolatileStatus;
 use crate::choices::MoveCategory;
-use crate::state::{Pokemon, PokemonStatus, Side, State};
+use crate::state::{Pokemon, PokemonStatus, Side, SideReference, State};
 
 const POKEMON_ALIVE: f32 = 30.0;
 const POKEMON_HP: f32 = 100.0;
@@ -67,8 +67,8 @@ const TOXIC_SPIKES: f32 = -7.0;
 const STICKY_WEB: f32 = -25.0;
 
 #[inline]
-fn evaluate_poison(pokemon: &Pokemon, base_score: f32) -> f32 {
-    match pokemon.ability {
+fn evaluate_poison(ability: Abilities, base_score: f32) -> f32 {
+    match ability {
         Abilities::POISONHEAL => 15.0,
         Abilities::GUTS
         | Abilities::MARVELSCALE
@@ -80,11 +80,11 @@ fn evaluate_poison(pokemon: &Pokemon, base_score: f32) -> f32 {
 }
 
 #[inline]
-fn evaluate_burned(pokemon: &Pokemon) -> f32 {
+fn evaluate_burned(pokemon: &Pokemon, ability: Abilities) -> f32 {
     // burn is not as punishing in certain situations
 
     // guts, marvel scale, quick feet will result in a positive evaluation
-    match pokemon.ability {
+    match ability {
         Abilities::GUTS | Abilities::MARVELSCALE | Abilities::QUICKFEET => {
             return -2.0 * POKEMON_BURNED
         }
@@ -116,11 +116,22 @@ fn get_boost_multiplier(boost: i8) -> f32 {
 }
 
 #[inline]
-fn evaluate_hazards(pokemon: &Pokemon, side: &Side) -> f32 {
+fn evaluate_hazards(
+    pokemon: &Pokemon,
+    side: &Side,
+    active_context: Option<(bool, bool, Abilities)>,
+) -> f32 {
     let mut score = 0.0;
-    let pkmn_is_grounded = pokemon.is_grounded();
-    if pokemon.item != Items::HEAVYDUTYBOOTS {
-        if pokemon.ability != Abilities::MAGICGUARD {
+    let (pkmn_is_grounded, item_is_active, ability) = match active_context {
+        Some(context) => context,
+        None => (
+            pokemon.is_grounded(),
+            pokemon.item_is_active(),
+            pokemon.ability,
+        ),
+    };
+    if !(pokemon.item == Items::HEAVYDUTYBOOTS && item_is_active) {
+        if ability != Abilities::MAGICGUARD {
             score += side.side_conditions.stealth_rock as f32 * STEALTH_ROCK;
             if pkmn_is_grounded {
                 score += side.side_conditions.spikes as f32 * SPIKES;
@@ -136,17 +147,17 @@ fn evaluate_hazards(pokemon: &Pokemon, side: &Side) -> f32 {
 }
 
 #[inline]
-fn evaluate_pokemon(pokemon: &Pokemon) -> f32 {
+fn evaluate_pokemon_with_ability(pokemon: &Pokemon, ability: Abilities) -> f32 {
     let mut score = 0.0;
     score += POKEMON_HP * pokemon.hp as f32 / pokemon.maxhp as f32;
 
     match pokemon.status {
-        PokemonStatus::BURN => score += evaluate_burned(pokemon),
+        PokemonStatus::BURN => score += evaluate_burned(pokemon, ability),
         PokemonStatus::FREEZE => score += POKEMON_FROZEN,
         PokemonStatus::SLEEP => score += POKEMON_ASLEEP,
         PokemonStatus::PARALYZE => score += POKEMON_PARALYZED,
-        PokemonStatus::TOXIC => score += evaluate_poison(pokemon, POKEMON_TOXIC),
-        PokemonStatus::POISON => score += evaluate_poison(pokemon, POKEMON_POISONED),
+        PokemonStatus::TOXIC => score += evaluate_poison(ability, POKEMON_TOXIC),
+        PokemonStatus::POISON => score += evaluate_poison(ability, POKEMON_POISONED),
         PokemonStatus::NONE => {}
     }
 
@@ -166,16 +177,32 @@ fn evaluate_pokemon(pokemon: &Pokemon) -> f32 {
 }
 
 #[inline]
+fn evaluate_pokemon(pokemon: &Pokemon) -> f32 {
+    evaluate_pokemon_with_ability(pokemon, pokemon.ability)
+}
+
+#[inline]
 pub fn evaluate(state: &State) -> f32 {
     let mut score = 0.0;
+    let side_one_active_context = state.active_context(&SideReference::SideOne);
+    let side_two_active_context = state.active_context(&SideReference::SideTwo);
 
     let mut iter = state.side_one.pokemon.into_iter();
     let mut s1_used_tera = false;
     while let Some(pkmn) = iter.next() {
         if pkmn.hp > 0 {
-            score += evaluate_pokemon(pkmn);
-            score += evaluate_hazards(pkmn, &state.side_one);
             if iter.pokemon_index == state.side_one.active_index {
+                let active_ability = side_one_active_context.ability;
+                score += evaluate_pokemon_with_ability(pkmn, active_ability);
+                score += evaluate_hazards(
+                    pkmn,
+                    &state.side_one,
+                    Some((
+                        side_one_active_context.is_grounded,
+                        side_one_active_context.item_is_active,
+                        active_ability,
+                    )),
+                );
                 for vs in state.side_one.volatile_statuses.iter() {
                     match vs {
                         PokemonVolatileStatus::LEECHSEED => score += LEECH_SEED,
@@ -192,6 +219,9 @@ pub fn evaluate(state: &State) -> f32 {
                 score += get_boost_multiplier(state.side_one.special_defense_boost)
                     * POKEMON_SPECIAL_DEFENSE_BOOST;
                 score += get_boost_multiplier(state.side_one.speed_boost) * POKEMON_SPEED_BOOST;
+            } else {
+                score += evaluate_pokemon(pkmn);
+                score += evaluate_hazards(pkmn, &state.side_one, None);
             }
         }
         if pkmn.terastallized {
@@ -205,10 +235,18 @@ pub fn evaluate(state: &State) -> f32 {
     let mut s2_used_tera = false;
     while let Some(pkmn) = iter.next() {
         if pkmn.hp > 0 {
-            score -= evaluate_pokemon(pkmn);
-            score -= evaluate_hazards(pkmn, &state.side_two);
-
             if iter.pokemon_index == state.side_two.active_index {
+                let active_ability = side_two_active_context.ability;
+                score -= evaluate_pokemon_with_ability(pkmn, active_ability);
+                score -= evaluate_hazards(
+                    pkmn,
+                    &state.side_two,
+                    Some((
+                        side_two_active_context.is_grounded,
+                        side_two_active_context.item_is_active,
+                        active_ability,
+                    )),
+                );
                 for vs in state.side_two.volatile_statuses.iter() {
                     match vs {
                         PokemonVolatileStatus::LEECHSEED => score -= LEECH_SEED,
@@ -225,6 +263,9 @@ pub fn evaluate(state: &State) -> f32 {
                 score -= get_boost_multiplier(state.side_two.special_defense_boost)
                     * POKEMON_SPECIAL_DEFENSE_BOOST;
                 score -= get_boost_multiplier(state.side_two.speed_boost) * POKEMON_SPEED_BOOST;
+            } else {
+                score -= evaluate_pokemon(pkmn);
+                score -= evaluate_hazards(pkmn, &state.side_two, None);
             }
         }
         if pkmn.terastallized {
@@ -250,4 +291,54 @@ pub fn evaluate(state: &State) -> f32 {
     score -= state.side_two.side_conditions.healing_wish as f32 * HEALING_WISH;
 
     score
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_suppressed_magicguard_counts_active_hazard_penalty() {
+        let mut guarded = State::default();
+        guarded.side_one.side_conditions.stealth_rock = 1;
+        guarded.side_one.get_active().ability = Abilities::MAGICGUARD;
+
+        let mut suppressed = guarded.clone();
+        suppressed
+            .side_one
+            .volatile_statuses
+            .insert(PokemonVolatileStatus::GASTROACID);
+
+        assert_eq!(evaluate(&guarded) + STEALTH_ROCK, evaluate(&suppressed));
+    }
+
+    #[test]
+    fn test_suppressed_magicguard_loses_poison_status_bonus() {
+        let mut guarded = State::default();
+        guarded.side_one.get_active().ability = Abilities::MAGICGUARD;
+        guarded.side_one.get_active().status = PokemonStatus::POISON;
+
+        let mut suppressed = guarded.clone();
+        suppressed
+            .side_one
+            .volatile_statuses
+            .insert(PokemonVolatileStatus::GASTROACID);
+
+        assert_eq!(evaluate(&guarded) - 20.0, evaluate(&suppressed));
+    }
+
+    #[test]
+    fn test_suppressed_guts_loses_burn_status_bonus() {
+        let mut guarded = State::default();
+        guarded.side_one.get_active().ability = Abilities::GUTS;
+        guarded.side_one.get_active().status = PokemonStatus::BURN;
+
+        let mut suppressed = guarded.clone();
+        suppressed
+            .side_one
+            .volatile_statuses
+            .insert(PokemonVolatileStatus::GASTROACID);
+
+        assert_eq!(evaluate(&guarded) - 50.0, evaluate(&suppressed));
+    }
 }

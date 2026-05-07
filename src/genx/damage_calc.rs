@@ -560,6 +560,16 @@ fn common_pkmn_damage_calc(
     damage * damage_modifier
 }
 
+fn apply_final_damage_modifier(damage: f32, modifier: f32) -> f32 {
+    if modifier == 1.0 {
+        return damage;
+    }
+
+    let damage = damage.floor();
+    let modifier = (modifier * 4096.0).floor();
+    ((damage * modifier).floor() + 2048.0 - 1.0) / 4096.0
+}
+
 // This is a basic damage calculation function that assumes special effects/modifiers
 // are reflected in the `Choice` struct
 //
@@ -641,6 +651,9 @@ pub fn calculate_damage(
             crit_damage = crit_damage.floor();
         }
     }
+
+    damage = apply_final_damage_modifier(damage, choice.final_damage_modifier).floor();
+    crit_damage = apply_final_damage_modifier(crit_damage, choice.final_damage_modifier).floor();
 
     Some((damage as i16, crit_damage as i16))
 }

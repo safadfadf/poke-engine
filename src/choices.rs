@@ -20511,6 +20511,7 @@ pub struct Choice {
     pub bypasses_protect: bool,
     pub protect_bypass_damage_multiplier: f32,
     pub protected_damage_multiplier: f32,
+    pub final_damage_modifier: f32,
     pub damage_blocked: bool,
 
     pub target: MoveTarget,
@@ -20646,6 +20647,7 @@ impl Default for Choice {
             bypasses_protect: false,
             protect_bypass_damage_multiplier: 1.0,
             protected_damage_multiplier: 1.0,
+            final_damage_modifier: 1.0,
             damage_blocked: false,
             target: MoveTarget::Opponent,
             first_move: true,

@@ -294,7 +294,7 @@ fn damage_reduction_berry(
                 new_item: Items::NONE,
             }));
         defending_pkmn.item = Items::NONE;
-        choice.base_power /= 2.0;
+        choice.final_damage_modifier *= 0.5;
     }
 }
 
@@ -474,7 +474,7 @@ pub fn item_before_move(
                     },
                 ));
                 defending_pkmn.item = Items::NONE;
-                choice.base_power /= 2.0;
+                choice.final_damage_modifier *= 0.5;
             }
         }
         Items::COBABERRY => damage_reduction_berry(

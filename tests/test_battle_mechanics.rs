@@ -9,7 +9,7 @@ use poke_engine::engine::generate_instructions::MAX_SLEEP_TURNS;
 use poke_engine::engine::generate_instructions::{
     generate_instructions_from_move_pair, BASE_CRIT_CHANCE, CONSECUTIVE_PROTECT_CHANCE,
 };
-use poke_engine::engine::items::Items;
+use poke_engine::engine::items::{item_before_move, Items};
 use poke_engine::engine::state::{MoveChoice, PokemonVolatileStatus, Terrain, Weather};
 use poke_engine::instruction::Instruction::ToggleSideOneForceSwitch;
 use poke_engine::instruction::{
@@ -4985,6 +4985,8 @@ fn test_normalgem_boosting_tackle() {
 fn test_chopleberry_damage_reduction() {
     let mut state = State::default();
     state.side_two.get_active().item = Items::CHOPLEBERRY;
+    state.side_two.get_active().hp = 100;
+    state.side_two.get_active().maxhp = 100;
     state.side_two.get_active().types = (PokemonType::NORMAL, PokemonType::TYPELESS);
 
     let vec_of_instructions = set_moves_on_pkmn_and_call_generate_instructions(
@@ -5003,7 +5005,7 @@ fn test_chopleberry_damage_reduction() {
             }),
             Instruction::Damage(DamageInstruction {
                 side_ref: SideReference::SideTwo,
-                damage_amount: 33, // 64 damage normally
+                damage_amount: 32, // 64 average damage normally
             }),
             Instruction::Boost(BoostInstruction {
                 side_ref: SideReference::SideOne,
@@ -5013,6 +5015,44 @@ fn test_chopleberry_damage_reduction() {
         ],
     }];
     assert_eq!(expected_instructions, vec_of_instructions);
+}
+
+#[test]
+fn test_yacheberry_damage_reduction_uses_final_damage_modifier() {
+    let mut state = State::default();
+    {
+        let garchomp = state.side_one.get_active();
+        garchomp.level = 50;
+        garchomp.types = (PokemonType::DRAGON, PokemonType::GROUND);
+        garchomp.hp = 132;
+        garchomp.maxhp = 205;
+        garchomp.defense = 120;
+        garchomp.item = Items::YACHEBERRY;
+    }
+    {
+        let kangaskhan = state.side_two.get_active();
+        kangaskhan.level = 50;
+        kangaskhan.attack = 161;
+        kangaskhan.replace_move(PokemonMoveIndex::M0, Choices::ICEPUNCH);
+    }
+
+    let mut choice = MOVES.get(&Choices::ICEPUNCH).unwrap().clone();
+    let mut instructions = StateInstructions {
+        percentage: 100.0,
+        instruction_list: Vec::new(),
+    };
+    item_before_move(
+        &mut state,
+        &mut choice,
+        &SideReference::SideTwo,
+        &mut instructions,
+    );
+
+    let min_damage = calculate_damage(&state, &SideReference::SideTwo, &choice, DamageRolls::Min);
+    let max_damage = calculate_damage(&state, &SideReference::SideTwo, &choice, DamageRolls::Max);
+
+    assert_eq!(Some((78, 117)), min_damage);
+    assert_eq!(Some((92, 138)), max_damage);
 }
 
 #[test]

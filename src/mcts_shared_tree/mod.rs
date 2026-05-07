@@ -1,6 +1,6 @@
 use super::{
     mcts_worker_count, sigmoid, MctsResult, MctsSideResult, MCTS_DAMAGE_BRANCH_DEPTH,
-    MCTS_DEADLINE_CHECK_INTERVAL, MCTS_MAX_ITERATIONS_PER_TREE,
+    MCTS_MAX_ITERATIONS_PER_TREE,
 };
 use crate::engine::evaluate::evaluate;
 use crate::engine::generate_instructions::generate_instructions_from_move_pair;
@@ -9,13 +9,15 @@ use crate::instruction::StateInstructions;
 use crate::state::State;
 use rand::prelude::*;
 use rand::rng;
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicI32, AtomicI64, AtomicU32, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::{mpsc, Arc, Condvar, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
 const SCORE_SCALE: f32 = 1_000_000.0;
 const VIRTUAL_LOSS_VISITS: u32 = 3;
+const SHARED_MCTS_JOB_ITERATIONS: u32 = 128;
 
 struct SharedMoveNode {
     move_choice: MoveChoice,
@@ -146,6 +148,7 @@ struct SharedNode {
     depth: u8,
     times_visited: AtomicU32,
     virtual_losses: AtomicI32,
+    eval: OnceLock<f32>,
     options: OnceLock<SharedNodeOptions>,
     children: OnceLock<SharedNodeChildren>,
 }
@@ -158,6 +161,7 @@ impl SharedNode {
             depth: 0,
             times_visited: AtomicU32::new(0),
             virtual_losses: AtomicI32::new(0),
+            eval: OnceLock::new(),
             options: OnceLock::new(),
             children: OnceLock::new(),
         });
@@ -179,6 +183,7 @@ impl SharedNode {
             depth,
             times_visited: AtomicU32::new(0),
             virtual_losses: AtomicI32::new(0),
+            eval: OnceLock::new(),
             options: OnceLock::new(),
             children: OnceLock::new(),
         })
@@ -312,10 +317,10 @@ struct PathStep {
     s2_index: usize,
 }
 
-fn rollout(state: &State, root_eval: f32) -> f32 {
+fn rollout(node: &SharedNode, state: &State, root_eval: f32) -> f32 {
     let battle_is_over = state.battle_is_over();
     if battle_is_over == 0.0 {
-        let eval = evaluate(state);
+        let eval = *node.eval.get_or_init(|| evaluate(state));
         sigmoid(eval - root_eval)
     } else if battle_is_over == -1.0 {
         0.0
@@ -401,10 +406,163 @@ fn do_shared_tree_playout<R: Rng + ?Sized>(
         }
     }
 
-    let score = rollout(state, root_eval);
+    let score = rollout(&current, state, root_eval);
     backpropagate(&path, &current, score);
     remove_virtual_losses(&path);
     reverse_path(state, &path);
+}
+
+type SharedMctsJob = Box<dyn FnOnce() + Send + 'static>;
+
+struct SharedMctsJobQueue {
+    jobs: Mutex<VecDeque<SharedMctsJob>>,
+    available: Condvar,
+}
+
+impl SharedMctsJobQueue {
+    fn new() -> Self {
+        Self {
+            jobs: Mutex::new(VecDeque::new()),
+            available: Condvar::new(),
+        }
+    }
+
+    fn submit(&self, job: SharedMctsJob) {
+        let mut jobs = self.jobs.lock().expect("shared MCTS job queue poisoned");
+        jobs.push_back(job);
+        self.available.notify_one();
+    }
+
+    fn recv(&self) -> SharedMctsJob {
+        let mut jobs = self.jobs.lock().expect("shared MCTS job queue poisoned");
+        loop {
+            if let Some(job) = jobs.pop_front() {
+                return job;
+            }
+            jobs = self
+                .available
+                .wait(jobs)
+                .expect("shared MCTS job queue poisoned");
+        }
+    }
+}
+
+struct SharedMctsWorkerPool {
+    queue: Arc<SharedMctsJobQueue>,
+    workers: usize,
+}
+
+impl SharedMctsWorkerPool {
+    fn new() -> Self {
+        Self {
+            queue: Arc::new(SharedMctsJobQueue::new()),
+            workers: 0,
+        }
+    }
+
+    fn ensure_workers(&mut self, worker_count: usize) {
+        while self.workers < worker_count {
+            let queue = self.queue.clone();
+            let worker_index = self.workers;
+            thread::Builder::new()
+                .name(format!("poke-engine-shared-mcts-{worker_index}"))
+                .spawn(move || loop {
+                    let job = queue.recv();
+                    job();
+                })
+                .expect("failed to spawn shared MCTS worker");
+            self.workers += 1;
+        }
+    }
+}
+
+fn shared_mcts_worker_pool() -> &'static Mutex<SharedMctsWorkerPool> {
+    static POOL: OnceLock<Mutex<SharedMctsWorkerPool>> = OnceLock::new();
+    POOL.get_or_init(|| Mutex::new(SharedMctsWorkerPool::new()))
+}
+
+struct SharedSearchLane {
+    root: Arc<SharedNode>,
+    state: Mutex<State>,
+    started_iterations: Arc<AtomicU32>,
+    deadline: Instant,
+    max_iterations: u32,
+    root_eval: f32,
+    job_queue: Arc<SharedMctsJobQueue>,
+    done_sender: mpsc::Sender<bool>,
+}
+
+fn schedule_shared_search_lane(lane: Arc<SharedSearchLane>) {
+    let job_queue = lane.job_queue.clone();
+    job_queue.submit(Box::new(move || run_shared_search_lane(lane)));
+}
+
+fn run_shared_search_lane(lane: Arc<SharedSearchLane>) {
+    let mut finished = false;
+    let mut reschedule = false;
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        if Instant::now() >= lane.deadline {
+            finished = true;
+            return;
+        }
+
+        {
+            let mut state = lane
+                .state
+                .lock()
+                .expect("shared MCTS lane state mutex poisoned");
+            let mut rng = rng();
+            let mut remaining = SHARED_MCTS_JOB_ITERATIONS;
+            while remaining > 0 {
+                let iteration = lane.started_iterations.fetch_add(1, Ordering::AcqRel);
+                if iteration >= lane.max_iterations {
+                    finished = true;
+                    break;
+                }
+
+                do_shared_tree_playout(&lane.root, &mut state, lane.root_eval, &mut rng);
+                remaining -= 1;
+            }
+        }
+
+        if !finished {
+            if Instant::now() >= lane.deadline {
+                finished = true;
+            } else {
+                reschedule = true;
+            }
+        }
+    }));
+
+    if result.is_err() {
+        let _ = lane.done_sender.send(false);
+    } else if finished {
+        let _ = lane.done_sender.send(true);
+    } else if reschedule {
+        schedule_shared_search_lane(lane);
+    }
+}
+
+fn shared_tree_drop_sender() -> &'static mpsc::Sender<Arc<SharedNode>> {
+    static DROP_SENDER: OnceLock<mpsc::Sender<Arc<SharedNode>>> = OnceLock::new();
+    DROP_SENDER.get_or_init(|| {
+        let (sender, receiver) = mpsc::channel::<Arc<SharedNode>>();
+        thread::Builder::new()
+            .name("poke-engine-shared-mcts-drop".to_string())
+            .spawn(move || {
+                while let Ok(root) = receiver.recv() {
+                    drop(root);
+                }
+            })
+            .expect("failed to spawn shared MCTS tree drop thread");
+        sender
+    })
+}
+
+fn drop_finished_shared_tree(root: Arc<SharedNode>) {
+    shared_tree_drop_sender()
+        .send(root)
+        .expect("shared MCTS tree drop worker stopped unexpectedly");
 }
 
 fn should_use_shared_tree_mcts() -> bool {
@@ -431,54 +589,57 @@ pub(super) fn perform_mcts_shared_tree(
     let started_iterations = Arc::new(AtomicU32::new(0));
     let max_iterations = MCTS_MAX_ITERATIONS_PER_TREE;
 
-    thread::scope(|scope| {
-        for _ in 0..worker_count {
-            let root = root.clone();
-            let started_iterations = started_iterations.clone();
-            let mut worker_state = state.clone();
-            scope.spawn(move || {
-                let mut rng = rng();
-                let mut iterations_until_deadline_check = 0;
-                loop {
-                    if iterations_until_deadline_check == 0 {
-                        if Instant::now() >= deadline {
-                            break;
-                        }
-                        iterations_until_deadline_check = MCTS_DEADLINE_CHECK_INTERVAL;
-                    }
-
-                    let iteration = started_iterations.fetch_add(1, Ordering::AcqRel);
-                    if iteration >= max_iterations {
-                        break;
-                    }
-
-                    do_shared_tree_playout(&root, &mut worker_state, root_eval, &mut rng);
-                    iterations_until_deadline_check -= 1;
-                }
-            });
-        }
-    });
-
-    let options = root.options.get().expect("root options initialized");
-    MctsResult {
-        s1: options
-            .s1
-            .iter()
-            .map(|v| MctsSideResult {
-                move_choice: v.move_choice,
-                total_score: v.total_score_f32(),
-                visits: v.visits.load(Ordering::Acquire),
-            })
-            .collect(),
-        s2: options
-            .s2
-            .iter()
-            .map(|v| MctsSideResult {
-                move_choice: v.move_choice,
-                total_score: v.total_score_f32(),
-                visits: v.visits.load(Ordering::Acquire),
-            })
-            .collect(),
-        iteration_count: root.times_visited.load(Ordering::Acquire),
+    let queue = {
+        let mut pool = shared_mcts_worker_pool()
+            .lock()
+            .expect("shared MCTS worker pool mutex poisoned");
+        pool.ensure_workers(worker_count);
+        pool.queue.clone()
+    };
+    let (done_sender, done_receiver) = mpsc::channel();
+    for _ in 0..worker_count {
+        schedule_shared_search_lane(Arc::new(SharedSearchLane {
+            root: root.clone(),
+            state: Mutex::new(state.clone()),
+            started_iterations: started_iterations.clone(),
+            deadline,
+            max_iterations,
+            root_eval,
+            job_queue: queue.clone(),
+            done_sender: done_sender.clone(),
+        }));
     }
+    drop(done_sender);
+    for worker_result in done_receiver.iter().take(worker_count) {
+        if !worker_result {
+            panic!("shared MCTS worker thread panicked");
+        }
+    }
+
+    let result = {
+        let options = root.options.get().expect("root options initialized");
+        MctsResult {
+            s1: options
+                .s1
+                .iter()
+                .map(|v| MctsSideResult {
+                    move_choice: v.move_choice,
+                    total_score: v.total_score_f32(),
+                    visits: v.visits.load(Ordering::Acquire),
+                })
+                .collect(),
+            s2: options
+                .s2
+                .iter()
+                .map(|v| MctsSideResult {
+                    move_choice: v.move_choice,
+                    total_score: v.total_score_f32(),
+                    visits: v.visits.load(Ordering::Acquire),
+                })
+                .collect(),
+            iteration_count: root.times_visited.load(Ordering::Acquire),
+        }
+    };
+    drop_finished_shared_tree(root);
+    result
 }

@@ -347,15 +347,12 @@ fn mcts_worker_count() -> usize {
         .map(|parallelism| parallelism.get())
         .unwrap_or(1);
 
-    // Root-parallel MCTS builds independent trees and merges only root stats.
-    // That is faster, but it is not equivalent to the legacy single-tree search,
-    // so keep it opt-in for callers that prefer speed over identical policy.
     std::env::var(MCTS_THREADS_ENV)
         .ok()
         .and_then(|value| value.parse::<usize>().ok())
         .filter(|value| *value > 0)
         .map(|value| value.min(available_parallelism))
-        .unwrap_or(1)
+        .unwrap_or_else(|| available_parallelism.min(32))
         .max(1)
 }
 

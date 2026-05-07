@@ -408,9 +408,9 @@ fn do_shared_tree_playout<R: Rng + ?Sized>(
 }
 
 fn should_use_shared_tree_mcts() -> bool {
-    matches!(
+    !matches!(
         std::env::var("POKE_ENGINE_MCTS_SHARED_TREE").as_deref(),
-        Ok("1") | Ok("true") | Ok("TRUE")
+        Ok("0") | Ok("false") | Ok("FALSE") | Ok("no") | Ok("NO") | Ok("off") | Ok("OFF")
     )
 }
 

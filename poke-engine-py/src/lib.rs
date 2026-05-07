@@ -686,6 +686,8 @@ impl Into<Pokemon> for PyPokemon {
             terastallized: self.terastallized,
             tera_type: PokemonType::from_str(&self.tera_type).unwrap(),
             mega_evolved: self.mega_evolved,
+            sword_boost_used: false,
+            shield_boost_used: false,
             moves: PokemonMoves {
                 m0: moves_vec[0].clone().into(),
                 m1: moves_vec[1].clone().into(),

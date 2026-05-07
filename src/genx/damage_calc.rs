@@ -150,27 +150,68 @@ fn weather_modifier(attacking_move_type: &PokemonType, weather: &Weather) -> f32
     }
 }
 
-fn damage_weather_for_attacker(state: &State, attacking_side_ref: &SideReference) -> Weather {
-    let defending_ability = state.active_ability(&attacking_side_ref.get_other_side());
-    if state.active_ability_is_active(attacking_side_ref, Abilities::MEGASOL)
+fn strong_weather_source_is_active_with_abilities(
+    state: &State,
+    weather: Weather,
+    side_one_ability: Abilities,
+    side_two_ability: Abilities,
+) -> bool {
+    if state.weather.weather_type != weather || state.weather.turns_remaining == 0 {
+        return false;
+    }
+
+    let required_ability = match weather {
+        Weather::HARSHSUN => Abilities::DESOLATELAND,
+        Weather::HEAVYRAIN => Abilities::PRIMORDIALSEA,
+        _ => return false,
+    };
+
+    side_one_ability == required_ability || side_two_ability == required_ability
+}
+
+fn weather_is_active_with_abilities(
+    state: &State,
+    weather: Weather,
+    side_one_ability: Abilities,
+    side_two_ability: Abilities,
+) -> bool {
+    state.weather.weather_type == weather
+        && state.weather.weather_type != Weather::NONE
+        && state.weather.turns_remaining != 0
+        && (!matches!(weather, Weather::HARSHSUN | Weather::HEAVYRAIN)
+            || strong_weather_source_is_active_with_abilities(
+                state,
+                weather,
+                side_one_ability,
+                side_two_ability,
+            ))
+        && side_one_ability != Abilities::AIRLOCK
+        && side_one_ability != Abilities::CLOUDNINE
+        && side_two_ability != Abilities::AIRLOCK
+        && side_two_ability != Abilities::CLOUDNINE
+}
+
+fn damage_weather_for_attacker(
+    state: &State,
+    attacking_side_ref: &SideReference,
+    attacking_ability: Abilities,
+    defending_ability: Abilities,
+) -> Weather {
+    if attacking_ability == Abilities::MEGASOL
         && defending_ability != Abilities::CLOUDNINE
         && defending_ability != Abilities::AIRLOCK
     {
         return Weather::SUN;
     }
 
-    for weather in [
-        Weather::HARSHSUN,
-        Weather::HEAVYRAIN,
-        Weather::SUN,
-        Weather::RAIN,
-        Weather::SAND,
-        Weather::SNOW,
-        Weather::HAIL,
-    ] {
-        if state.weather_is_active(&weather) {
-            return weather;
-        }
+    let (side_one_ability, side_two_ability) = match attacking_side_ref {
+        SideReference::SideOne => (attacking_ability, defending_ability),
+        SideReference::SideTwo => (defending_ability, attacking_ability),
+    };
+
+    let weather = state.weather.weather_type;
+    if weather_is_active_with_abilities(state, weather, side_one_ability, side_two_ability) {
+        return weather;
     }
     Weather::NONE
 }
@@ -791,15 +832,15 @@ pub fn calculate_damage(
     }
     let attacking_side_ref = *attacking_side;
     let defending_side_ref = attacking_side_ref.get_other_side();
-    let attacker_is_grounded = state.active_is_grounded(&attacking_side_ref);
-    let defender_is_grounded = state.active_is_grounded(&defending_side_ref);
+    let attacking_context = state.active_context(&attacking_side_ref);
+    let defending_context = state.active_context(&defending_side_ref);
     let (attacking_side, defending_side) = state.get_both_sides_immutable(&attacking_side_ref);
     let attacker = attacking_side.get_active_immutable();
     let defender = defending_side.get_active_immutable();
-    let attacking_ability = state.active_ability(&attacking_side_ref);
-    let defending_ability = state.active_ability(&defending_side_ref);
+    let attacking_ability = attacking_context.ability;
+    let defending_ability = defending_context.ability;
     let defender_has_effective_ability_shield =
-        state.active_has_effective_item(&defending_side_ref, Items::ABILITYSHIELD);
+        defending_context.has_effective_item(Items::ABILITYSHIELD);
     let (attacking_stat, defending_stat, crit_attacking_stat, crit_defending_stat) =
         get_attacking_and_defending_stats(
             attacker,
@@ -812,7 +853,12 @@ pub fn calculate_damage(
             defender_has_effective_ability_shield,
             &choice,
         );
-    let attacker_weather = damage_weather_for_attacker(state, &attacking_side_ref);
+    let attacker_weather = damage_weather_for_attacker(
+        state,
+        &attacking_side_ref,
+        attacking_ability,
+        defending_ability,
+    );
     let active_terrain = state.get_terrain();
 
     let damage = common_pkmn_base_damage(attacker, attacking_stat, defending_stat, choice);
@@ -827,8 +873,8 @@ pub fn calculate_damage(
         defender,
         &attacker_weather,
         &active_terrain,
-        attacker_is_grounded,
-        defender_is_grounded,
+        attacking_context.is_grounded,
+        defending_context.is_grounded,
         attacking_ability,
         defending_ability,
         choice,
@@ -851,11 +897,11 @@ pub fn calculate_futuresight_damage(
     let attacking_stat = attacker.special_attack;
     let defending_stat = defending_side.get_active_immutable().special_defense;
     let attacking_ability = if attacking_side.active_index == *attacking_side_pokemon_index {
-        state.active_ability(attacking_side_ref)
+        state.active_context(attacking_side_ref).ability
     } else {
         Abilities::NONE
     };
-    let defending_ability = state.active_ability(&defending_side_ref);
+    let defending_ability = state.active_context(&defending_side_ref).ability;
     let attacker_weather = Weather::NONE;
     let active_terrain = Terrain::NONE;
     let choice = MOVES.get(&Choices::FUTURESIGHT).unwrap();

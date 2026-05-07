@@ -12,6 +12,7 @@ const MCTS_MAX_ITERATIONS_PER_TREE: u32 = 10_000_000;
 const MCTS_DEADLINE_CHECK_INTERVAL: u32 = 128;
 const MCTS_THREADS_ENV: &str = "POKE_ENGINE_MCTS_THREADS";
 const MCTS_SYNC_TREE_DROP_ENV: &str = "POKE_ENGINE_MCTS_SYNC_TREE_DROP";
+const MCTS_DAMAGE_BRANCH_DEPTH: u8 = 3;
 
 fn sigmoid(x: f32) -> f32 {
     // Tuned so that ~200 points is very close to 1.0
@@ -29,6 +30,7 @@ pub struct Node {
     pub instructions: StateInstructions,
     pub s1_choice: u8,
     pub s2_choice: u8,
+    pub depth: u8,
 
     // represents the total score and number of visits for this node
     // de-coupled for s1 and s2
@@ -82,6 +84,7 @@ impl Node {
             children: None,
             s1_choice: 0,
             s2_choice: 0,
+            depth: 0,
             s1_options: None,
             s2_options: None,
         }
@@ -180,7 +183,7 @@ impl Node {
         {
             return self as *mut Node;
         }
-        let should_branch_on_damage = self.root || (*self.parent).root;
+        let should_branch_on_damage = self.depth < MCTS_DAMAGE_BRANCH_DEPTH;
         let mut new_instructions =
             generate_instructions_from_move_pair(state, s1_move, s2_move, should_branch_on_damage);
         let mut this_pair_vec = Vec::with_capacity(new_instructions.len());
@@ -190,6 +193,7 @@ impl Node {
             new_node.instructions = state_instructions;
             new_node.s1_choice = s1_move_index as u8;
             new_node.s2_choice = s2_move_index as u8;
+            new_node.depth = self.depth.saturating_add(1);
 
             this_pair_vec.push(new_node);
         }

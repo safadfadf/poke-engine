@@ -1,4 +1,4 @@
-use super::abilities::Abilities;
+use super::abilities::{mold_breaker_ignores, Abilities};
 use super::choice_effects::charge_volatile_to_choice;
 use super::items::Items;
 use crate::choices::{Choices, MoveCategory};
@@ -33,6 +33,43 @@ fn multiply_boost(boost_num: i8, stat_value: i16) -> i16 {
         5 => stat_value * 7 / 2,
         6 => stat_value * 8 / 2,
         _ => panic!("Invalid boost number: {}", boost_num),
+    }
+}
+
+fn ability_ignores_neutralizing_gas(ability: Abilities) -> bool {
+    matches!(
+        ability,
+        Abilities::ASONEGLASTRIER
+            | Abilities::ASONESPECTRIER
+            | Abilities::BATTLEBOND
+            | Abilities::COMATOSE
+            | Abilities::DISGUISE
+            | Abilities::GULPMISSILE
+            | Abilities::ICEFACE
+            | Abilities::MULTITYPE
+            | Abilities::POWERCONSTRUCT
+            | Abilities::RKSSYSTEM
+            | Abilities::SCHOOLING
+            | Abilities::SHIELDSDOWN
+            | Abilities::STANCECHANGE
+            | Abilities::TERASHIFT
+            | Abilities::ZENMODE
+            | Abilities::ZEROTOHERO
+    )
+}
+
+#[derive(Debug, Copy, Clone)]
+pub struct ActiveContext {
+    pub ability: Abilities,
+    pub ability_is_suppressed: bool,
+    pub item: Items,
+    pub item_is_active: bool,
+    pub is_grounded: bool,
+}
+
+impl ActiveContext {
+    pub fn has_effective_item(&self, item: Items) -> bool {
+        self.item == item && self.item_is_active
     }
 }
 
@@ -223,6 +260,9 @@ define_enum_with_from_str! {
         UNBURDEN,
         UPROAR,
         YAWN,
+        PROTOSYNTHESISBOOSTER,
+        QUARKDRIVEBOOSTER,
+        NEUTRALIZINGGASENDING,
     },
     default = NONE
 }
@@ -336,6 +376,7 @@ impl Pokemon {
         last_used_move: &LastUsedMove,
         encored: bool,
         taunted: bool,
+        item_is_active: bool,
         can_tera: bool,
         can_mega: bool,
     ) {
@@ -359,7 +400,7 @@ impl Pokemon {
                         // just assume nothing is locked in this case
                     }
                 }
-                if (self.item == Items::ASSAULTVEST || taunted)
+                if ((self.item == Items::ASSAULTVEST && item_is_active) || taunted)
                     && self.moves[&iter.pokemon_move_index].choice.category == MoveCategory::Status
                 {
                     continue;
@@ -537,17 +578,29 @@ impl Pokemon {
         !self.item_is_permanent()
     }
 
-    pub fn is_grounded(&self) -> bool {
-        if self.item == Items::IRONBALL {
+    pub fn item_ignores_klutz(&self) -> bool {
+        self.item_is_permanent() || self.item == Items::ABILITYSHIELD
+    }
+
+    pub fn item_is_active(&self) -> bool {
+        self.item != Items::NONE && (self.ability != Abilities::KLUTZ || self.item_ignores_klutz())
+    }
+
+    pub fn is_grounded_with(&self, item_is_active: bool, levitate_is_active: bool) -> bool {
+        if self.item == Items::IRONBALL && item_is_active {
             return true;
         }
         if self.has_type(&PokemonType::FLYING)
-            || self.ability == Abilities::LEVITATE
-            || self.item == Items::AIRBALLOON
+            || levitate_is_active
+            || (self.item == Items::AIRBALLOON && item_is_active)
         {
             return false;
         }
         true
+    }
+
+    pub fn is_grounded(&self) -> bool {
+        self.is_grounded_with(self.item_is_active(), self.ability == Abilities::LEVITATE)
     }
 
     pub fn volatile_status_can_be_applied(
@@ -555,6 +608,7 @@ impl Pokemon {
         volatile_status: &PokemonVolatileStatus,
         active_volatiles: &PokemonVolatileStatusSet,
         first_move: bool,
+        active_ability: Abilities,
     ) -> bool {
         if active_volatiles.contains(volatile_status) || self.hp == 0 {
             return false;
@@ -576,18 +630,19 @@ impl Pokemon {
             }
             PokemonVolatileStatus::SUBSTITUTE => self.hp > self.maxhp / 4,
             PokemonVolatileStatus::FLINCH => {
-                if !first_move || [Abilities::INNERFOCUS].contains(&self.ability) {
+                if !first_move || [Abilities::INNERFOCUS].contains(&active_ability) {
                     return false;
                 }
                 true
             }
             PokemonVolatileStatus::PROTECT => first_move,
+            PokemonVolatileStatus::GASTROACID => !ability_ignores_neutralizing_gas(active_ability),
             PokemonVolatileStatus::TAUNT
             | PokemonVolatileStatus::TORMENT
             | PokemonVolatileStatus::ENCORE
             | PokemonVolatileStatus::DISABLE
             | PokemonVolatileStatus::HEALBLOCK
-            | PokemonVolatileStatus::ATTRACT => self.ability != Abilities::AROMAVEIL,
+            | PokemonVolatileStatus::ATTRACT => active_ability != Abilities::AROMAVEIL,
             _ => true,
         }
     }
@@ -596,14 +651,16 @@ impl Pokemon {
         &self,
         stat: &PokemonBoostableStat,
         volatiles: &PokemonVolatileStatusSet,
+        active_ability: Abilities,
+        item_is_active: bool,
     ) -> bool {
         if [
             Abilities::CLEARBODY,
             Abilities::WHITESMOKE,
             Abilities::FULLMETALBODY,
         ]
-        .contains(&self.ability)
-            || ([Items::CLEARAMULET].contains(&self.item))
+        .contains(&active_ability)
+            || (self.item == Items::CLEARAMULET && item_is_active)
         {
             return true;
         }
@@ -612,9 +669,9 @@ impl Pokemon {
             return true;
         }
 
-        if stat == &PokemonBoostableStat::Attack && self.ability == Abilities::HYPERCUTTER {
+        if stat == &PokemonBoostableStat::Attack && active_ability == Abilities::HYPERCUTTER {
             return true;
-        } else if stat == &PokemonBoostableStat::Accuracy && self.ability == Abilities::KEENEYE {
+        } else if stat == &PokemonBoostableStat::Accuracy && active_ability == Abilities::KEENEYE {
             return true;
         }
 
@@ -876,7 +933,9 @@ impl Side {
         {
             return true;
         }
-        if active_pkmn.item == Items::SHEDSHELL || active_pkmn.has_type(&PokemonType::GHOST) {
+        if (active_pkmn.item == Items::SHEDSHELL && active_pkmn.item_is_active())
+            || active_pkmn.has_type(&PokemonType::GHOST)
+        {
             return false;
         } else if self
             .volatile_statuses
@@ -907,6 +966,228 @@ impl Side {
 }
 
 impl State {
+    pub fn active_context(&self, side_ref: &SideReference) -> ActiveContext {
+        let side = self.get_side_immutable(side_ref);
+        let active = side.get_active_immutable();
+        let raw_ability = active.ability;
+        let item = active.item;
+        let item_blocked_by_embargo = side
+            .volatile_statuses
+            .contains(&PokemonVolatileStatus::EMBARGO);
+        let has_effective_ability_shield =
+            item == Items::ABILITYSHIELD && item != Items::NONE && !item_blocked_by_embargo;
+
+        let ability_is_suppressed = if ability_ignores_neutralizing_gas(raw_ability) {
+            false
+        } else if side
+            .volatile_statuses
+            .contains(&PokemonVolatileStatus::GASTROACID)
+        {
+            true
+        } else if has_effective_ability_shield || raw_ability == Abilities::NEUTRALIZINGGAS {
+            false
+        } else {
+            let other_side = self.get_side_immutable(&side_ref.get_other_side());
+            let other_active = other_side.get_active_immutable();
+            other_active.hp > 0
+                && other_active.ability == Abilities::NEUTRALIZINGGAS
+                && !other_side
+                    .volatile_statuses
+                    .contains(&PokemonVolatileStatus::GASTROACID)
+                && !other_side
+                    .volatile_statuses
+                    .contains(&PokemonVolatileStatus::NEUTRALIZINGGASENDING)
+        };
+
+        let ability = if active.hp == 0 || ability_is_suppressed {
+            Abilities::NONE
+        } else {
+            raw_ability
+        };
+        let item_is_active = item != Items::NONE
+            && !item_blocked_by_embargo
+            && (raw_ability != Abilities::KLUTZ
+                || ability_is_suppressed
+                || active.item_ignores_klutz());
+        let is_grounded = active.is_grounded_with(item_is_active, ability == Abilities::LEVITATE);
+
+        ActiveContext {
+            ability,
+            ability_is_suppressed,
+            item,
+            item_is_active,
+            is_grounded,
+        }
+    }
+
+    pub fn active_ability_is_suppressed(&self, side_ref: &SideReference) -> bool {
+        let side = self.get_side_immutable(side_ref);
+        let active = side.get_active_immutable();
+        let active_ability = active.ability;
+        if ability_ignores_neutralizing_gas(active_ability) {
+            return false;
+        }
+        if side
+            .volatile_statuses
+            .contains(&PokemonVolatileStatus::GASTROACID)
+        {
+            return true;
+        }
+        if self.active_has_effective_item(side_ref, Items::ABILITYSHIELD)
+            || active_ability == Abilities::NEUTRALIZINGGAS
+        {
+            return false;
+        }
+
+        let other_side = self.get_side_immutable(&side_ref.get_other_side());
+        let other_active = other_side.get_active_immutable();
+        other_active.hp > 0
+            && other_active.ability == Abilities::NEUTRALIZINGGAS
+            && !other_side
+                .volatile_statuses
+                .contains(&PokemonVolatileStatus::GASTROACID)
+            && !other_side
+                .volatile_statuses
+                .contains(&PokemonVolatileStatus::NEUTRALIZINGGASENDING)
+    }
+
+    pub fn active_ability_is_active(&self, side_ref: &SideReference, ability: Abilities) -> bool {
+        self.active_ability(side_ref) == ability
+    }
+
+    pub fn active_ability_can_be_suppressed_by_neutralizing_gas(
+        &self,
+        side_ref: &SideReference,
+    ) -> bool {
+        let side = self.get_side_immutable(side_ref);
+        let active = side.get_active_immutable();
+        !self.active_has_effective_item(side_ref, Items::ABILITYSHIELD)
+            && !side
+                .volatile_statuses
+                .contains(&PokemonVolatileStatus::GASTROACID)
+            && active.ability != Abilities::NEUTRALIZINGGAS
+            && !ability_ignores_neutralizing_gas(active.ability)
+    }
+
+    pub fn active_ability(&self, side_ref: &SideReference) -> Abilities {
+        let active = self.get_side_immutable(side_ref).get_active_immutable();
+        if active.hp == 0 || self.active_ability_is_suppressed(side_ref) {
+            Abilities::NONE
+        } else {
+            active.ability
+        }
+    }
+
+    pub fn active_ignores_target_ability(
+        &self,
+        attacking_side_ref: &SideReference,
+        choice: &Choices,
+        target_ability: Abilities,
+        is_status_move: bool,
+    ) -> bool {
+        let target_side_ref = attacking_side_ref.get_other_side();
+        if self.active_has_effective_item(&target_side_ref, Items::ABILITYSHIELD) {
+            return false;
+        }
+
+        let attacking_ability = self.active_ability(attacking_side_ref);
+        let attacker_has_ignore_ability = matches!(
+            attacking_ability,
+            Abilities::MOLDBREAKER | Abilities::TERAVOLT | Abilities::TURBOBLAZE
+        ) || (*choice == Choices::MOONGEISTBEAM
+            || *choice == Choices::PHOTONGEYSER
+            || *choice == Choices::SUNSTEELSTRIKE)
+            || (attacking_ability == Abilities::MYCELIUMMIGHT && is_status_move);
+
+        attacker_has_ignore_ability && mold_breaker_ignores(&target_ability)
+    }
+
+    pub fn active_item_is_active(&self, side_ref: &SideReference) -> bool {
+        let side = self.get_side_immutable(side_ref);
+        let active = side.get_active_immutable();
+        active.item != Items::NONE
+            && !side
+                .volatile_statuses
+                .contains(&PokemonVolatileStatus::EMBARGO)
+            && (active.ability != Abilities::KLUTZ
+                || self.active_ability_is_suppressed(side_ref)
+                || active.item_ignores_klutz())
+    }
+
+    pub fn active_has_effective_item(&self, side_ref: &SideReference, item: Items) -> bool {
+        let side = self.get_side_immutable(side_ref);
+        let active = side.get_active_immutable();
+        active.item == item
+            && active.item != Items::NONE
+            && !side
+                .volatile_statuses
+                .contains(&PokemonVolatileStatus::EMBARGO)
+            && (active.ability != Abilities::KLUTZ
+                || active.item_ignores_klutz()
+                || self.active_ability_is_suppressed(side_ref))
+    }
+
+    pub fn active_ability_can_be_changed(&self, side_ref: &SideReference) -> bool {
+        let active = self.get_side_immutable(side_ref).get_active_immutable();
+        active.hp != 0 && !self.active_has_effective_item(side_ref, Items::ABILITYSHIELD)
+    }
+
+    pub fn active_item_can_be_removed(&self, side_ref: &SideReference) -> bool {
+        let active = self.get_side_immutable(side_ref).get_active_immutable();
+        if self.active_ability_is_active(side_ref, Abilities::STICKYHOLD) {
+            return false;
+        }
+        !active.item_is_permanent()
+    }
+
+    pub fn active_is_grounded(&self, side_ref: &SideReference) -> bool {
+        let active = self.get_side_immutable(side_ref).get_active_immutable();
+        active.is_grounded_with(
+            self.active_item_is_active(side_ref),
+            self.active_ability_is_active(side_ref, Abilities::LEVITATE),
+        )
+    }
+
+    pub fn active_is_trapped(&self, side_ref: &SideReference) -> bool {
+        let side = self.get_side_immutable(side_ref);
+        let active_pkmn = side.get_active_immutable();
+        if side
+            .volatile_statuses
+            .contains(&PokemonVolatileStatus::LOCKEDMOVE)
+            || side
+                .volatile_statuses
+                .contains(&PokemonVolatileStatus::NORETREAT)
+        {
+            return true;
+        }
+        if (active_pkmn.item == Items::SHEDSHELL && self.active_item_is_active(side_ref))
+            || active_pkmn.has_type(&PokemonType::GHOST)
+        {
+            return false;
+        } else if side
+            .volatile_statuses
+            .contains(&PokemonVolatileStatus::PARTIALLYTRAPPED)
+        {
+            return true;
+        }
+
+        let opponent_side_ref = side_ref.get_other_side();
+        if self.active_ability_is_active(&opponent_side_ref, Abilities::SHADOWTAG)
+            && !self.active_ability_is_active(side_ref, Abilities::SHADOWTAG)
+        {
+            return true;
+        } else if self.active_ability_is_active(&opponent_side_ref, Abilities::ARENATRAP)
+            && self.active_is_grounded(side_ref)
+        {
+            return true;
+        } else if self.active_ability_is_active(&opponent_side_ref, Abilities::MAGNETPULL)
+            && active_pkmn.has_type(&PokemonType::STEEL)
+        {
+            return true;
+        }
+        false
+    }
+
     pub fn generate_team_preview_options(
         valid_pokemon: &Vec<PokemonIndex>,
         leads: Option<Vec<PokemonIndex>>,
@@ -990,6 +1271,7 @@ impl State {
                 &self.side_one.last_used_move,
                 encored,
                 taunted,
+                self.active_item_is_active(&SideReference::SideOne),
                 self.side_one.can_use_tera(),
                 self.side_one.can_use_mega(),
             );
@@ -1018,6 +1300,7 @@ impl State {
                 &self.side_two.last_used_move,
                 encored,
                 taunted,
+                self.active_item_is_active(&SideReference::SideTwo),
                 self.side_two.can_use_tera(),
                 self.side_two.can_use_mega(),
             );
@@ -1036,9 +1319,6 @@ impl State {
     pub fn get_all_options(&self) -> (Vec<MoveChoice>, Vec<MoveChoice>) {
         let mut side_one_options: Vec<MoveChoice> = Vec::with_capacity(9);
         let mut side_two_options: Vec<MoveChoice> = Vec::with_capacity(9);
-
-        let side_one_active = self.side_one.get_active_immutable();
-        let side_two_active = self.side_two.get_active_immutable();
 
         if self.side_one.force_switch {
             self.side_one.add_switches(&mut side_one_options);
@@ -1107,10 +1387,11 @@ impl State {
                 &self.side_one.last_used_move,
                 encored,
                 taunted,
+                self.active_item_is_active(&SideReference::SideOne),
                 self.side_one.can_use_tera(),
                 self.side_one.can_use_mega(),
             );
-            if !self.side_one.trapped(side_two_active) {
+            if !self.active_is_trapped(&SideReference::SideOne) {
                 self.side_one.add_switches(&mut side_one_options);
             }
         }
@@ -1137,10 +1418,11 @@ impl State {
                 &self.side_two.last_used_move,
                 encored,
                 taunted,
+                self.active_item_is_active(&SideReference::SideTwo),
                 self.side_two.can_use_tera(),
                 self.side_two.can_use_mega(),
             );
-            if !self.side_two.trapped(side_one_active) {
+            if !self.active_is_trapped(&SideReference::SideTwo) {
                 self.side_two.add_switches(&mut side_two_options);
             }
         }
@@ -1268,14 +1550,55 @@ impl State {
         }
     }
 
+    pub fn strong_weather_source_is_active(&self, weather: &Weather) -> bool {
+        if self.weather.weather_type != *weather || self.weather.turns_remaining == 0 {
+            return false;
+        }
+
+        let required_ability = match weather {
+            Weather::HARSHSUN => Abilities::DESOLATELAND,
+            Weather::HEAVYRAIN => Abilities::PRIMORDIALSEA,
+            _ => return false,
+        };
+
+        for side_ref in [SideReference::SideOne, SideReference::SideTwo] {
+            let active = self.get_side_immutable(&side_ref).get_active_immutable();
+            if active.hp > 0 && self.active_ability(&side_ref) == required_ability {
+                return true;
+            }
+        }
+
+        false
+    }
+
+    pub fn active_strong_weather_blocks_regular_weather(&self) -> bool {
+        self.strong_weather_source_is_active(&Weather::HARSHSUN)
+            || self.strong_weather_source_is_active(&Weather::HEAVYRAIN)
+    }
+
+    pub fn regular_weather_should_be_set(&self, weather: Weather) -> bool {
+        !self.active_strong_weather_blocks_regular_weather()
+            && (self.weather.weather_type != weather || self.weather.turns_remaining == 0)
+    }
+
+    pub fn weather_should_be_set(&self, weather: Weather) -> bool {
+        self.weather.weather_type != weather || self.weather.turns_remaining == 0
+    }
+
+    pub fn terrain_should_be_set(&self, terrain: Terrain) -> bool {
+        self.terrain.terrain_type != terrain || self.terrain.turns_remaining == 0
+    }
+
     pub fn weather_is_active(&self, weather: &Weather) -> bool {
-        let s1_active = self.side_one.get_active_immutable();
-        let s2_active = self.side_two.get_active_immutable();
         &self.weather.weather_type == weather
-            && s1_active.ability != Abilities::AIRLOCK
-            && s1_active.ability != Abilities::CLOUDNINE
-            && s2_active.ability != Abilities::AIRLOCK
-            && s2_active.ability != Abilities::CLOUDNINE
+            && self.weather.weather_type != Weather::NONE
+            && self.weather.turns_remaining != 0
+            && (!matches!(weather, Weather::HARSHSUN | Weather::HEAVYRAIN)
+                || self.strong_weather_source_is_active(weather))
+            && self.active_ability(&SideReference::SideOne) != Abilities::AIRLOCK
+            && self.active_ability(&SideReference::SideOne) != Abilities::CLOUDNINE
+            && self.active_ability(&SideReference::SideTwo) != Abilities::AIRLOCK
+            && self.active_ability(&SideReference::SideTwo) != Abilities::CLOUDNINE
     }
 
     fn _state_contains_any_move(&self, moves: &[Choices]) -> bool {

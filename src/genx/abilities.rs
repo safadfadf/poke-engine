@@ -1,15 +1,19 @@
 #![allow(unused_variables)]
 use super::damage_calc::type_effectiveness_modifier;
 use super::generate_instructions::{
-    add_remove_status_instructions, apply_boost_instruction, immune_to_status,
+    add_remove_status_instructions, apply_boost_instruction_with_effective, immune_to_status,
 };
-use super::items::{get_choice_move_disable_instructions, Items};
+use super::items::{
+    consume_berry, get_choice_move_disable_instructions, opponent_blocks_berries, Items,
+};
 use super::state::{PokemonVolatileStatus, Terrain, Weather};
 use crate::choices::{
     Boost, Choice, Choices, Effect, Heal, MoveCategory, MoveTarget, Secondary, StatBoosts,
     VolatileStatus,
 };
 use crate::define_enum_with_from_str;
+#[cfg(feature = "gen9")]
+use crate::instruction::ToggleAbilityOnStartFlagInstruction;
 use crate::instruction::{
     ApplyVolatileStatusInstruction, BoostInstruction, ChangeAbilityInstruction,
     ChangeItemInstruction, ChangeSideConditionInstruction, ChangeStatusInstruction, ChangeTerrain,
@@ -29,6 +33,22 @@ pub const WEATHER_ABILITY_TURNS: i8 = -1;
 
 #[cfg(any(feature = "gen6", feature = "gen7", feature = "gen8", feature = "gen9"))]
 pub const WEATHER_ABILITY_TURNS: i8 = 5;
+
+fn active_strong_weather_blocks_regular_weather(state: &State) -> bool {
+    state.active_strong_weather_blocks_regular_weather()
+}
+
+fn regular_weather_should_be_set(state: &State, weather: Weather) -> bool {
+    !active_strong_weather_blocks_regular_weather(state) && state.weather_should_be_set(weather)
+}
+
+fn weather_should_be_set(state: &State, weather: Weather) -> bool {
+    state.weather_should_be_set(weather)
+}
+
+fn terrain_should_be_set(state: &State, terrain: Terrain) -> bool {
+    state.terrain_should_be_set(terrain)
+}
 
 define_enum_with_from_str! {
     #[repr(i16)]
@@ -359,7 +379,7 @@ define_enum_with_from_str! {
 }
 
 // https://bulbapedia.bulbagarden.net/wiki/Ignoring_Abilities#Ignorable_Abilities
-fn mold_breaker_ignores(ability: &Abilities) -> bool {
+pub(crate) fn mold_breaker_ignores(ability: &Abilities) -> bool {
     match ability {
         Abilities::BATTLEARMOR
         | Abilities::CLEARBODY
@@ -449,25 +469,128 @@ fn mold_breaker_ignores(ability: &Abilities) -> bool {
     }
 }
 
+fn ability_cannot_be_replaced_by_contact(ability: Abilities) -> bool {
+    matches!(
+        ability,
+        Abilities::ASONEGLASTRIER
+            | Abilities::ASONESPECTRIER
+            | Abilities::BATTLEBOND
+            | Abilities::COMATOSE
+            | Abilities::DISGUISE
+            | Abilities::GULPMISSILE
+            | Abilities::ICEFACE
+            | Abilities::MULTITYPE
+            | Abilities::POWERCONSTRUCT
+            | Abilities::RKSSYSTEM
+            | Abilities::SCHOOLING
+            | Abilities::SHIELDSDOWN
+            | Abilities::STANCECHANGE
+            | Abilities::TERASHIFT
+            | Abilities::ZENMODE
+            | Abilities::ZEROTOHERO
+    )
+}
+
+fn ability_fails_skill_swap(ability: Abilities) -> bool {
+    matches!(
+        ability,
+        Abilities::ASONEGLASTRIER
+            | Abilities::ASONESPECTRIER
+            | Abilities::BATTLEBOND
+            | Abilities::COMATOSE
+            | Abilities::COMMANDER
+            | Abilities::DISGUISE
+            | Abilities::EMBODYASPECT
+            | Abilities::EMBODYASPECTCORNERSTONE
+            | Abilities::EMBODYASPECTHEARTHFLAME
+            | Abilities::EMBODYASPECTTEAL
+            | Abilities::EMBODYASPECTWELLSPRING
+            | Abilities::HUNGERSWITCH
+            | Abilities::ICEFACE
+            | Abilities::ILLUSION
+            | Abilities::MULTITYPE
+            | Abilities::NEUTRALIZINGGAS
+            | Abilities::POISONPUPPETEER
+            | Abilities::POWERCONSTRUCT
+            | Abilities::PROTOSYNTHESIS
+            | Abilities::QUARKDRIVE
+            | Abilities::RKSSYSTEM
+            | Abilities::SCHOOLING
+            | Abilities::SHIELDSDOWN
+            | Abilities::STANCECHANGE
+            | Abilities::TERAFORMZERO
+            | Abilities::TERASHELL
+            | Abilities::TERASHIFT
+            | Abilities::WONDERGUARD
+            | Abilities::ZENMODE
+            | Abilities::ZEROTOHERO
+    )
+}
+
+fn ability_fails_trace(ability: Abilities) -> bool {
+    matches!(
+        ability,
+        Abilities::NONE
+            | Abilities::ASONEGLASTRIER
+            | Abilities::ASONESPECTRIER
+            | Abilities::BATTLEBOND
+            | Abilities::COMATOSE
+            | Abilities::COMMANDER
+            | Abilities::DISGUISE
+            | Abilities::EMBODYASPECTCORNERSTONE
+            | Abilities::EMBODYASPECTHEARTHFLAME
+            | Abilities::EMBODYASPECTTEAL
+            | Abilities::EMBODYASPECTWELLSPRING
+            | Abilities::FLOWERGIFT
+            | Abilities::FORECAST
+            | Abilities::HUNGERSWITCH
+            | Abilities::ICEFACE
+            | Abilities::ILLUSION
+            | Abilities::IMPOSTER
+            | Abilities::MULTITYPE
+            | Abilities::NEUTRALIZINGGAS
+            | Abilities::POISONPUPPETEER
+            | Abilities::POWERCONSTRUCT
+            | Abilities::POWEROFALCHEMY
+            | Abilities::PROTOSYNTHESIS
+            | Abilities::QUARKDRIVE
+            | Abilities::RECEIVER
+            | Abilities::RKSSYSTEM
+            | Abilities::SCHOOLING
+            | Abilities::SHIELDSDOWN
+            | Abilities::STANCECHANGE
+            | Abilities::TERAFORMZERO
+            | Abilities::TERASHELL
+            | Abilities::TERASHIFT
+            | Abilities::TRACE
+            | Abilities::ZENMODE
+            | Abilities::ZEROTOHERO
+    )
+}
+
 fn protosynthesus_or_quarkdrive_on_switch_in(
     thing_is_active: bool,
+    item_is_active: bool,
     volatile: PokemonVolatileStatus,
+    booster_volatile: PokemonVolatileStatus,
     instructions: &mut StateInstructions,
     attacking_side: &mut Side,
     side_ref: &SideReference,
 ) {
     let active_pkmn = attacking_side.get_active();
     if thing_is_active {
-        instructions
-            .instruction_list
-            .push(Instruction::ApplyVolatileStatus(
-                ApplyVolatileStatusInstruction {
-                    side_ref: *side_ref,
-                    volatile_status: volatile,
-                },
-            ));
-        attacking_side.volatile_statuses.insert(volatile);
-    } else if active_pkmn.item == Items::BOOSTERENERGY {
+        if !attacking_side.volatile_statuses.contains(&volatile) {
+            instructions
+                .instruction_list
+                .push(Instruction::ApplyVolatileStatus(
+                    ApplyVolatileStatusInstruction {
+                        side_ref: *side_ref,
+                        volatile_status: volatile,
+                    },
+                ));
+            attacking_side.volatile_statuses.insert(volatile);
+        }
+    } else if active_pkmn.item == Items::BOOSTERENERGY && item_is_active {
         instructions
             .instruction_list
             .push(Instruction::ChangeItem(ChangeItemInstruction {
@@ -483,8 +606,17 @@ fn protosynthesus_or_quarkdrive_on_switch_in(
                     volatile_status: volatile,
                 },
             ));
+        instructions
+            .instruction_list
+            .push(Instruction::ApplyVolatileStatus(
+                ApplyVolatileStatusInstruction {
+                    side_ref: *side_ref,
+                    volatile_status: booster_volatile,
+                },
+            ));
         active_pkmn.item = Items::NONE;
         attacking_side.volatile_statuses.insert(volatile);
+        attacking_side.volatile_statuses.insert(booster_volatile);
     }
 }
 
@@ -510,92 +642,135 @@ fn quarkdrive_volatile_from_side(side: &Side) -> PokemonVolatileStatus {
     }
 }
 
+fn apply_charge_volatile(
+    side: &mut Side,
+    side_ref: SideReference,
+    instructions: &mut StateInstructions,
+) {
+    if side.get_active_immutable().hp == 0
+        || side
+            .volatile_statuses
+            .contains(&PokemonVolatileStatus::CHARGE)
+    {
+        return;
+    }
+    instructions
+        .instruction_list
+        .push(Instruction::ApplyVolatileStatus(
+            ApplyVolatileStatusInstruction {
+                side_ref,
+                volatile_status: PokemonVolatileStatus::CHARGE,
+            },
+        ));
+    side.volatile_statuses.insert(PokemonVolatileStatus::CHARGE);
+}
+
 pub fn ability_before_move(
     state: &mut State,
     choice: &mut Choice,
     side_ref: &SideReference,
     instructions: &mut StateInstructions,
 ) {
+    let defending_side_ref = side_ref.get_other_side();
+    let active_ability_is_suppressed = state.active_ability_is_suppressed(side_ref);
+    let defending_ability_is_suppressed = state.active_ability_is_suppressed(&defending_side_ref);
+    let raw_defending_ability = state
+        .get_side_immutable(&defending_side_ref)
+        .get_active_immutable()
+        .ability;
+    let defending_ability = if defending_ability_is_suppressed {
+        Abilities::NONE
+    } else {
+        raw_defending_ability
+    };
+    let target_ability_ignored = state.active_ignores_target_ability(
+        side_ref,
+        &choice.move_id,
+        defending_ability,
+        choice.category == MoveCategory::Status,
+    );
     let (attacking_side, defending_side) = state.get_both_sides(side_ref);
     let defending_index = defending_side.active_index;
-    let active_ability = attacking_side.get_active_immutable().ability;
+    let active_ability = if active_ability_is_suppressed {
+        Abilities::NONE
+    } else {
+        attacking_side.get_active_immutable().ability
+    };
     let defender_has_substitute = defending_side
         .volatile_statuses
         .contains(&PokemonVolatileStatus::SUBSTITUTE);
     let active_pkmn = attacking_side.get_active();
     let defending_pkmn = defending_side.get_active();
 
-    if active_ability == Abilities::NEUTRALIZINGGAS {
-        // Neutralizing Gas suppresses the defender's damage-prevention abilities.
+    let defending_ability = if target_ability_ignored {
+        Abilities::NONE
     } else {
-        match defending_pkmn.ability {
-            Abilities::NEUTRALIZINGGAS => {
-                return;
-            }
-            Abilities::ICEFACE => {
-                let hit_substitute = defender_has_substitute
-                    && !choice.flags.sound
-                    && active_ability != Abilities::INFILTRATOR;
-                if defending_pkmn.id == PokemonName::EISCUE
-                    && choice.category == MoveCategory::Physical
-                    && !hit_substitute
-                {
-                    choice.damage_blocked = true;
-                }
-            }
-            // Technically incorrect
-            // A move missing should not trigger this formechange
-            #[cfg(not(any(feature = "gen8", feature = "gen9")))]
-            Abilities::DISGUISE
-                if (choice.category == MoveCategory::Physical
-                    || choice.category == MoveCategory::Special)
-                    && (defending_pkmn.id == PokemonName::MIMIKYU
-                        || defending_pkmn.id == PokemonName::MIMIKYUTOTEM) =>
+        defending_ability
+    };
+    match defending_ability {
+        Abilities::ICEFACE => {
+            let hit_substitute = defender_has_substitute
+                && !choice.flags.sound
+                && active_ability != Abilities::INFILTRATOR;
+            if defending_pkmn.id == PokemonName::EISCUE
+                && choice.category == MoveCategory::Physical
+                && !hit_substitute
             {
-                choice.base_power = 0.0;
-                instructions.instruction_list.push(Instruction::FormeChange(
-                    FormeChangeInstruction {
-                        side_ref: side_ref.get_other_side(),
-                        name_change: PokemonName::MIMIKYUBUSTED as i16 - defending_pkmn.id as i16,
-                    },
-                ));
-                defending_pkmn.id = PokemonName::MIMIKYUBUSTED;
+                choice.damage_blocked = true;
             }
-            #[cfg(any(feature = "gen8", feature = "gen9"))]
-            Abilities::DISGUISE
-                if (choice.category == MoveCategory::Physical
-                    || choice.category == MoveCategory::Special)
-                    && (defending_pkmn.id == PokemonName::MIMIKYU
-                        || defending_pkmn.id == PokemonName::MIMIKYUTOTEM) =>
-            {
-                choice.base_power = 0.0;
-                instructions.instruction_list.push(Instruction::FormeChange(
-                    FormeChangeInstruction {
-                        side_ref: side_ref.get_other_side(),
-                        name_change: PokemonName::MIMIKYUBUSTED as i16 - defending_pkmn.id as i16,
-                    },
-                ));
-                defending_pkmn.id = PokemonName::MIMIKYUBUSTED;
-                let dmg = cmp::min(defending_pkmn.hp, defending_pkmn.maxhp / 8);
-                instructions
-                    .instruction_list
-                    .push(Instruction::DamageWithFaintContext(
-                        DamageWithFaintContextInstruction {
-                            side_ref: side_ref.get_other_side(),
-                            damage_amount: dmg,
-                            faint_context: FaintContext::ability_effect(
-                                side_ref.get_other_side(),
-                                defending_index,
-                                Abilities::DISGUISE,
-                            ),
-                        },
-                    ));
-                defending_pkmn.hp -= dmg;
-            }
-            _ => {}
         }
+        // Technically incorrect
+        // A move missing should not trigger this formechange
+        #[cfg(not(any(feature = "gen8", feature = "gen9")))]
+        Abilities::DISGUISE
+            if (choice.category == MoveCategory::Physical
+                || choice.category == MoveCategory::Special)
+                && (defending_pkmn.id == PokemonName::MIMIKYU
+                    || defending_pkmn.id == PokemonName::MIMIKYUTOTEM) =>
+        {
+            choice.base_power = 0.0;
+            instructions
+                .instruction_list
+                .push(Instruction::FormeChange(FormeChangeInstruction {
+                    side_ref: side_ref.get_other_side(),
+                    name_change: PokemonName::MIMIKYUBUSTED as i16 - defending_pkmn.id as i16,
+                }));
+            defending_pkmn.id = PokemonName::MIMIKYUBUSTED;
+        }
+        #[cfg(any(feature = "gen8", feature = "gen9"))]
+        Abilities::DISGUISE
+            if (choice.category == MoveCategory::Physical
+                || choice.category == MoveCategory::Special)
+                && (defending_pkmn.id == PokemonName::MIMIKYU
+                    || defending_pkmn.id == PokemonName::MIMIKYUTOTEM) =>
+        {
+            choice.base_power = 0.0;
+            instructions
+                .instruction_list
+                .push(Instruction::FormeChange(FormeChangeInstruction {
+                    side_ref: side_ref.get_other_side(),
+                    name_change: PokemonName::MIMIKYUBUSTED as i16 - defending_pkmn.id as i16,
+                }));
+            defending_pkmn.id = PokemonName::MIMIKYUBUSTED;
+            let dmg = cmp::min(defending_pkmn.hp, defending_pkmn.maxhp / 8);
+            instructions
+                .instruction_list
+                .push(Instruction::DamageWithFaintContext(
+                    DamageWithFaintContextInstruction {
+                        side_ref: side_ref.get_other_side(),
+                        damage_amount: dmg,
+                        faint_context: FaintContext::ability_effect(
+                            side_ref.get_other_side(),
+                            defending_index,
+                            Abilities::DISGUISE,
+                        ),
+                    },
+                ));
+            defending_pkmn.hp -= dmg;
+        }
+        _ => {}
     }
-    match active_pkmn.ability {
+    match active_ability {
         Abilities::GULPMISSILE => {
             if active_pkmn.id == PokemonName::CRAMORANT
                 && (choice.move_id == Choices::SURF || choice.move_id == Choices::DIVE)
@@ -692,47 +867,58 @@ pub fn ability_after_damage_hit(
     damage_dealt: i16,
     instructions: &mut StateInstructions,
 ) {
+    let active_ability_is_suppressed = state.active_ability_is_suppressed(side_ref);
+    let defending_ability_is_suppressed =
+        state.active_ability_is_suppressed(&side_ref.get_other_side());
+    let active_item_is_active = state.active_item_is_active(side_ref);
+    let defending_item_is_active = state.active_item_is_active(&side_ref.get_other_side());
+    let defending_item_can_be_removed =
+        state.active_item_can_be_removed(&side_ref.get_other_side());
     let (attacking_side, defending_side) = state.get_both_sides(side_ref);
     let active_pkmn = attacking_side.get_active();
-    if defending_side.get_active_immutable().ability == Abilities::NEUTRALIZINGGAS
-        || active_pkmn.ability == Abilities::NEUTRALIZINGGAS
-    {
-        return;
-    }
-    match active_pkmn.ability {
+    let active_ability = if active_ability_is_suppressed {
+        Abilities::NONE
+    } else {
+        active_pkmn.ability
+    };
+    match active_ability {
         Abilities::BATTLEBOND => {
             if damage_dealt > 0 && defending_side.get_active_immutable().hp == 0 {
-                apply_boost_instruction(
+                apply_boost_instruction_with_effective(
                     attacking_side,
                     &PokemonBoostableStat::Attack,
                     &1,
                     side_ref,
                     side_ref,
+                    active_ability,
+                    active_item_is_active,
                     instructions,
                 );
-                apply_boost_instruction(
+                apply_boost_instruction_with_effective(
                     attacking_side,
                     &PokemonBoostableStat::SpecialAttack,
                     &1,
                     side_ref,
                     side_ref,
+                    active_ability,
+                    active_item_is_active,
                     instructions,
                 );
-                apply_boost_instruction(
+                apply_boost_instruction_with_effective(
                     attacking_side,
                     &PokemonBoostableStat::Speed,
                     &1,
                     side_ref,
                     side_ref,
+                    active_ability,
+                    active_item_is_active,
                     instructions,
                 );
             }
         }
         Abilities::MAGICIAN | Abilities::PICKPOCKET => {
             let defending_pkmn = defending_side.get_active();
-            if damage_dealt > 0
-                && defending_pkmn.item_can_be_removed()
-                && active_pkmn.item == Items::NONE
+            if damage_dealt > 0 && defending_item_can_be_removed && active_pkmn.item == Items::NONE
             {
                 instructions.instruction_list.push(Instruction::ChangeItem(
                     ChangeItemInstruction {
@@ -754,24 +940,28 @@ pub fn ability_after_damage_hit(
         }
         Abilities::MOXIE | Abilities::CHILLINGNEIGH | Abilities::ASONEGLASTRIER => {
             if damage_dealt > 0 && defending_side.get_active_immutable().hp == 0 {
-                apply_boost_instruction(
+                apply_boost_instruction_with_effective(
                     attacking_side,
                     &PokemonBoostableStat::Attack,
                     &1,
                     side_ref,
                     side_ref,
+                    active_ability,
+                    active_item_is_active,
                     instructions,
                 );
             }
         }
         Abilities::GRIMNEIGH | Abilities::ASONESPECTRIER => {
             if damage_dealt > 0 && defending_side.get_active_immutable().hp == 0 {
-                apply_boost_instruction(
+                apply_boost_instruction_with_effective(
                     attacking_side,
                     &PokemonBoostableStat::SpecialAttack,
                     &1,
                     side_ref,
                     side_ref,
+                    active_ability,
+                    active_item_is_active,
                     instructions,
                 );
             }
@@ -779,25 +969,39 @@ pub fn ability_after_damage_hit(
         Abilities::BEASTBOOST => {
             if damage_dealt > 0 && defending_side.get_active_immutable().hp == 0 {
                 let highest_stat = &attacking_side.calculate_highest_stat();
-                apply_boost_instruction(
+                apply_boost_instruction_with_effective(
                     attacking_side,
                     highest_stat,
                     &1,
                     side_ref,
                     side_ref,
+                    active_ability,
+                    active_item_is_active,
                     instructions,
                 );
             }
         }
         _ => {}
     }
+    let attacking_ability_can_be_changed = state.active_ability_can_be_changed(side_ref);
+    let defending_ability_can_be_changed =
+        state.active_ability_can_be_changed(&side_ref.get_other_side());
     let (attacking_side, defending_side) = state.get_both_sides(side_ref);
     let defending_index = defending_side.active_index;
     let attacking_pkmn = attacking_side.get_active();
     let defending_pkmn = defending_side.get_active();
-    match defending_pkmn.ability {
-        Abilities::MUMMY | Abilities::LINGERINGAROMA | Abilities::WANDERINGSPIRIT => {
-            if choice.flags.contact {
+    let defending_ability = if defending_ability_is_suppressed {
+        Abilities::NONE
+    } else {
+        defending_pkmn.ability
+    };
+    match defending_ability {
+        Abilities::MUMMY => {
+            if choice.flags.contact
+                && attacking_ability_can_be_changed
+                && attacking_pkmn.ability != Abilities::MUMMY
+                && !ability_cannot_be_replaced_by_contact(attacking_pkmn.ability)
+            {
                 instructions
                     .instruction_list
                     .push(Instruction::ChangeAbility(ChangeAbilityInstruction {
@@ -805,6 +1009,57 @@ pub fn ability_after_damage_hit(
                         ability_change: Abilities::MUMMY as i16 - attacking_pkmn.ability as i16,
                     }));
                 attacking_pkmn.ability = Abilities::MUMMY;
+            }
+        }
+        Abilities::LINGERINGAROMA => {
+            if choice.flags.contact
+                && attacking_ability_can_be_changed
+                && attacking_pkmn.ability != Abilities::LINGERINGAROMA
+                && !ability_cannot_be_replaced_by_contact(attacking_pkmn.ability)
+            {
+                instructions
+                    .instruction_list
+                    .push(Instruction::ChangeAbility(ChangeAbilityInstruction {
+                        side_ref: *side_ref,
+                        ability_change: Abilities::LINGERINGAROMA as i16
+                            - attacking_pkmn.ability as i16,
+                    }));
+                attacking_pkmn.ability = Abilities::LINGERINGAROMA;
+            }
+        }
+        Abilities::WANDERINGSPIRIT => {
+            if choice.flags.contact
+                && attacking_ability_can_be_changed
+                && defending_ability_can_be_changed
+                && !ability_fails_skill_swap(attacking_pkmn.ability)
+                && !ability_fails_skill_swap(defending_pkmn.ability)
+            {
+                let attacking_ability = attacking_pkmn.ability;
+                let defending_ability = defending_pkmn.ability;
+                instructions
+                    .instruction_list
+                    .push(Instruction::ChangeAbility(ChangeAbilityInstruction {
+                        side_ref: *side_ref,
+                        ability_change: defending_ability as i16 - attacking_ability as i16,
+                    }));
+                instructions
+                    .instruction_list
+                    .push(Instruction::ChangeAbility(ChangeAbilityInstruction {
+                        side_ref: side_ref.get_other_side(),
+                        ability_change: attacking_ability as i16 - defending_ability as i16,
+                    }));
+                attacking_pkmn.ability = defending_ability;
+                defending_pkmn.ability = attacking_ability;
+            }
+        }
+        Abilities::ELECTROMORPHOSIS => {
+            if damage_dealt > 0 && defending_pkmn.hp != 0 {
+                apply_charge_volatile(defending_side, side_ref.get_other_side(), instructions);
+            }
+        }
+        Abilities::WINDPOWER => {
+            if damage_dealt > 0 && defending_pkmn.hp != 0 && choice.flags.wind {
+                apply_charge_volatile(defending_side, side_ref.get_other_side(), instructions);
             }
         }
         Abilities::GULPMISSILE => {
@@ -837,12 +1092,14 @@ pub fn ability_after_damage_hit(
 
                 if defending_pkmn.id == PokemonName::CRAMORANTGULPING {
                     defending_pkmn.id = PokemonName::CRAMORANT;
-                    apply_boost_instruction(
+                    apply_boost_instruction_with_effective(
                         attacking_side,
                         &PokemonBoostableStat::Defense,
                         &-1,
                         &side_ref.get_other_side(),
                         side_ref,
+                        active_ability,
+                        active_item_is_active,
                         instructions,
                     );
                 } else if defending_pkmn.id == PokemonName::CRAMORANTGORGING {
@@ -871,30 +1128,34 @@ pub fn ability_after_damage_hit(
         }
         Abilities::STAMINA => {
             if damage_dealt > 0 && defending_pkmn.hp != 0 {
-                apply_boost_instruction(
+                apply_boost_instruction_with_effective(
                     defending_side,
                     &PokemonBoostableStat::Defense,
                     &1,
                     side_ref,
                     &side_ref.get_other_side(),
+                    defending_ability,
+                    defending_item_is_active,
                     instructions,
                 );
             }
         }
         Abilities::COTTONDOWN => {
             if damage_dealt > 0 {
-                apply_boost_instruction(
+                apply_boost_instruction_with_effective(
                     attacking_side,
                     &PokemonBoostableStat::Speed,
                     &-1,
                     &side_ref.get_other_side(),
                     side_ref,
+                    active_ability,
+                    active_item_is_active,
                     instructions,
                 );
             }
         }
         Abilities::SANDSPIT => {
-            if damage_dealt > 0 && state.weather.weather_type != Weather::SAND {
+            if damage_dealt > 0 && regular_weather_should_be_set(state, Weather::SAND) {
                 instructions
                     .instruction_list
                     .push(Instruction::ChangeWeather(ChangeWeather {
@@ -908,7 +1169,7 @@ pub fn ability_after_damage_hit(
             }
         }
         Abilities::SEEDSOWER => {
-            if damage_dealt > 0 && state.terrain.terrain_type != Terrain::GRASSYTERRAIN {
+            if damage_dealt > 0 && terrain_should_be_set(state, Terrain::GRASSYTERRAIN) {
                 instructions
                     .instruction_list
                     .push(Instruction::ChangeTerrain(ChangeTerrain {
@@ -944,12 +1205,14 @@ pub fn ability_after_damage_hit(
                 && defending_pkmn.hp < defending_pkmn.maxhp / 2
                 && defending_pkmn.hp + damage_dealt >= defending_pkmn.maxhp / 2
             {
-                apply_boost_instruction(
+                apply_boost_instruction_with_effective(
                     defending_side,
                     &PokemonBoostableStat::SpecialAttack,
                     &1,
                     &side_ref.get_other_side(),
                     &side_ref.get_other_side(),
+                    defending_ability,
+                    defending_item_is_active,
                     instructions,
                 );
             }
@@ -971,7 +1234,7 @@ pub fn ability_after_damage_hit(
                             faint_context: FaintContext::ability_effect(
                                 side_ref.get_other_side(),
                                 defending_index,
-                                defending_pkmn.ability,
+                                defending_ability,
                             ),
                         },
                     ));
@@ -1027,10 +1290,12 @@ pub fn ability_after_damage_hit(
         Abilities::PERISHBODY => {
             if damage_dealt > 0 && choice.flags.contact {
                 for side_ref in [SideReference::SideOne, SideReference::SideTwo] {
+                    let soundproof_active =
+                        state.active_ability(&side_ref) == Abilities::SOUNDPROOF;
                     let side = state.get_side(&side_ref);
                     let pkmn = side.get_active();
                     if pkmn.hp != 0
-                        && pkmn.ability != Abilities::SOUNDPROOF
+                        && !soundproof_active
                         && !(side
                             .volatile_statuses
                             .contains(&PokemonVolatileStatus::PERISH4)
@@ -1065,20 +1330,13 @@ pub fn ability_after_damage_hit(
 pub fn ability_after_substitute_hit(
     attacking_side: &mut Side,
     defending_side: &Side,
-    attacking_ability: Abilities,
+    defending_ability: Abilities,
     choice: &Choice,
     side_ref: &SideReference,
     damage_dealt: i16,
     instructions: &mut StateInstructions,
 ) {
-    let defending_pkmn = defending_side.get_active_immutable();
-    if defending_pkmn.ability == Abilities::NEUTRALIZINGGAS
-        || attacking_ability == Abilities::NEUTRALIZINGGAS
-    {
-        return;
-    }
-
-    if defending_pkmn.ability == Abilities::TOXICDEBRIS
+    if defending_ability == Abilities::TOXICDEBRIS
         && damage_dealt > 0
         && choice.category == MoveCategory::Physical
         && attacking_side.side_conditions.toxic_spikes < 2
@@ -1130,19 +1388,21 @@ fn apply_spicy_spray_burn(
         return;
     }
 
+    let berries_blocked = opponent_blocks_berries(state, side_ref);
+    let cheek_pouch_active = state.active_ability_is_active(side_ref, Abilities::CHEEKPOUCH);
+    let item_is_active = state.active_item_is_active(side_ref);
     let attacking_side = state.get_side(side_ref);
     let active_index = attacking_side.active_index;
     let attacking_pkmn = attacking_side.get_active();
 
-    if attacking_pkmn.item == Items::LUMBERRY {
-        instructions
-            .instruction_list
-            .push(Instruction::ChangeItem(ChangeItemInstruction {
-                side_ref: *side_ref,
-                current_item: Items::LUMBERRY,
-                new_item: Items::NONE,
-            }));
-        attacking_pkmn.item = Items::NONE;
+    if attacking_pkmn.item == Items::LUMBERRY && item_is_active && !berries_blocked {
+        consume_berry(
+            side_ref,
+            attacking_pkmn,
+            Items::LUMBERRY,
+            cheek_pouch_active,
+            instructions,
+        );
     } else {
         instructions
             .instruction_list
@@ -1161,12 +1421,21 @@ pub fn ability_on_switch_out(
     side_ref: &SideReference,
     instructions: &mut StateInstructions,
 ) {
+    let active_ability_is_suppressed = state.active_ability_is_suppressed(side_ref);
+    let other_side_ref = side_ref.get_other_side();
+    let other_active = state
+        .get_side_immutable(&other_side_ref)
+        .get_active_immutable();
+    let other_active_hp = other_active.hp;
+    let other_active_ability = state.active_ability(&other_side_ref);
     let (attacking_side, defending_side) = state.get_both_sides(side_ref);
     let active_pkmn = attacking_side.get_active();
-    if defending_side.get_active_immutable().ability == Abilities::NEUTRALIZINGGAS {
-        return;
-    }
-    match active_pkmn.ability {
+    let active_ability = if active_ability_is_suppressed {
+        Abilities::NONE
+    } else {
+        active_pkmn.ability
+    };
+    match active_ability {
         Abilities::GULPMISSILE if active_pkmn.base_ability == Abilities::GULPMISSILE => {
             if active_pkmn.id != PokemonName::CRAMORANT {
                 instructions.instruction_list.push(Instruction::FormeChange(
@@ -1229,7 +1498,9 @@ pub fn ability_on_switch_out(
             }
         }
         Abilities::PRIMORDIALSEA => {
-            if state.weather.weather_type == Weather::HEAVYRAIN {
+            if state.weather.weather_type == Weather::HEAVYRAIN
+                && (other_active_hp == 0 || other_active_ability != Abilities::PRIMORDIALSEA)
+            {
                 instructions
                     .instruction_list
                     .push(Instruction::ChangeWeather(ChangeWeather {
@@ -1243,7 +1514,9 @@ pub fn ability_on_switch_out(
             }
         }
         Abilities::DESOLATELAND => {
-            if state.weather.weather_type == Weather::HARSHSUN {
+            if state.weather.weather_type == Weather::HARSHSUN
+                && (other_active_hp == 0 || other_active_ability != Abilities::DESOLATELAND)
+            {
                 instructions
                     .instruction_list
                     .push(Instruction::ChangeWeather(ChangeWeather {
@@ -1279,13 +1552,20 @@ pub fn ability_end_of_turn(
 ) {
     let sun_is_active =
         state.weather_is_active(&Weather::HARSHSUN) || state.weather_is_active(&Weather::SUN);
+    let rain_is_active =
+        state.weather_is_active(&Weather::HEAVYRAIN) || state.weather_is_active(&Weather::RAIN);
+    let hail_or_snow_is_active =
+        state.weather_is_active(&Weather::HAIL) || state.weather_is_active(&Weather::SNOW);
+    let active_ability_is_suppressed = state.active_ability_is_suppressed(side_ref);
     let (attacking_side, defending_side) = state.get_both_sides(side_ref);
     let attacking_index = attacking_side.active_index;
     let active_pkmn = attacking_side.get_active();
-    if defending_side.get_active_immutable().ability == Abilities::NEUTRALIZINGGAS {
-        return;
-    }
-    match active_pkmn.ability {
+    let active_ability = if active_ability_is_suppressed {
+        Abilities::NONE
+    } else {
+        active_pkmn.ability
+    };
+    match active_ability {
         Abilities::HUNGERSWITCH => {
             if active_pkmn.id == PokemonName::MORPEKO && !active_pkmn.terastallized {
                 instructions.instruction_list.push(Instruction::FormeChange(
@@ -1397,7 +1677,7 @@ pub fn ability_end_of_turn(
             }
         }
         Abilities::ICEBODY => {
-            if state.weather_is_active(&Weather::HAIL) {
+            if hail_or_snow_is_active {
                 let active_pkmn = state.get_side(side_ref).get_active();
                 let health_recovered =
                     cmp::min(active_pkmn.maxhp / 16, active_pkmn.maxhp - active_pkmn.hp);
@@ -1439,9 +1719,7 @@ pub fn ability_end_of_turn(
             }
         }
         Abilities::RAINDISH => {
-            if state.weather_is_active(&Weather::RAIN)
-                || state.weather_is_active(&Weather::HEAVYRAIN)
-            {
+            if rain_is_active {
                 let active_pkmn = state.get_side(side_ref).get_active();
                 let health_recovered =
                     cmp::min(active_pkmn.maxhp / 16, active_pkmn.maxhp - active_pkmn.hp);
@@ -1457,8 +1735,7 @@ pub fn ability_end_of_turn(
             }
         }
         Abilities::DRYSKIN => {
-            if state.weather_is_active(&Weather::RAIN) {
-                let active_pkmn = state.get_side(side_ref).get_active();
+            if rain_is_active {
                 if active_pkmn.hp < active_pkmn.maxhp {
                     let heal_amount =
                         cmp::min(active_pkmn.maxhp / 8, active_pkmn.maxhp - active_pkmn.hp);
@@ -1469,13 +1746,28 @@ pub fn ability_end_of_turn(
                     active_pkmn.hp += heal_amount;
                     instructions.instruction_list.push(ins);
                 }
+            } else if sun_is_active {
+                let damage_dealt = cmp::min(active_pkmn.maxhp / 8, active_pkmn.hp);
+                if damage_dealt > 0 {
+                    instructions
+                        .instruction_list
+                        .push(Instruction::DamageWithFaintContext(
+                            DamageWithFaintContextInstruction {
+                                side_ref: *side_ref,
+                                damage_amount: damage_dealt,
+                                faint_context: FaintContext::ability_effect(
+                                    *side_ref,
+                                    attacking_index,
+                                    Abilities::DRYSKIN,
+                                ),
+                            },
+                        ));
+                    active_pkmn.hp -= damage_dealt;
+                }
             }
         }
         Abilities::HYDRATION => {
-            if active_pkmn.status != PokemonStatus::NONE
-                && (state.weather_is_active(&Weather::RAIN)
-                    || state.weather_is_active(&Weather::HEAVYRAIN))
-            {
+            if active_pkmn.status != PokemonStatus::NONE && rain_is_active {
                 let attacking_side = state.get_side(side_ref);
                 let active_index = attacking_side.active_index;
                 let active_pkmn = attacking_side.get_active();
@@ -1508,21 +1800,30 @@ pub fn ability_end_of_turn(
     }
 }
 
-pub fn ability_on_switch_in(
+pub fn ability_on_start(
     state: &mut State,
     side_ref: &SideReference,
     instructions: &mut StateInstructions,
 ) {
+    let active_ability_is_active = !state.active_ability_is_suppressed(side_ref);
+    let defender_side_ref = side_ref.get_other_side();
+    let active_item_is_active = state.active_item_is_active(side_ref);
+    let active_ability_can_be_changed = state.active_ability_can_be_changed(side_ref);
+    let defender_ability = state.active_ability(&defender_side_ref);
+    let defender_item_is_active = state.active_item_is_active(&defender_side_ref);
     let (attacking_side, defending_side) = state.get_both_sides(side_ref);
+    let active_index = attacking_side.active_index;
     let active_pkmn = attacking_side.get_active();
     let defending_pkmn = defending_side.get_active_immutable();
-    if defending_pkmn.ability == Abilities::NEUTRALIZINGGAS {
-        return;
-    }
 
     // trace copying an ability needs to happen before the ability check to activate on switch-in
     // e.g. tracing intimidate will activate intimidate
-    if active_pkmn.ability == Abilities::TRACE && active_pkmn.ability != defending_pkmn.ability {
+    if active_ability_is_active
+        && active_pkmn.ability == Abilities::TRACE
+        && active_pkmn.ability != defending_pkmn.ability
+        && active_ability_can_be_changed
+        && !ability_fails_trace(defending_pkmn.ability)
+    {
         instructions
             .instruction_list
             .push(Instruction::ChangeAbility(ChangeAbilityInstruction {
@@ -1532,10 +1833,16 @@ pub fn ability_on_switch_in(
         active_pkmn.ability = defending_pkmn.ability;
     }
 
-    match active_pkmn.ability {
+    let active_ability = if active_ability_is_active {
+        active_pkmn.ability
+    } else {
+        Abilities::NONE
+    };
+    match active_ability {
         Abilities::ICEFACE => {
-            if active_pkmn.id == PokemonName::EISCUENOICE && state.weather_is_active(&Weather::HAIL)
-                || state.weather_is_active(&Weather::SNOW)
+            if active_pkmn.id == PokemonName::EISCUENOICE
+                && (state.weather_is_active(&Weather::HAIL)
+                    || state.weather_is_active(&Weather::SNOW))
             {
                 let active_pkmn = state.get_side(side_ref).get_active();
                 instructions.instruction_list.push(Instruction::FormeChange(
@@ -1550,11 +1857,14 @@ pub fn ability_on_switch_in(
         }
         Abilities::PROTOSYNTHESIS => {
             let sun_is_active = state.weather_is_active(&Weather::SUN);
+            let item_is_active = state.active_item_is_active(side_ref);
             let attacking_side = state.get_side(side_ref);
             let volatile = protosynthesis_volatile_from_side(&attacking_side);
             protosynthesus_or_quarkdrive_on_switch_in(
                 sun_is_active,
+                item_is_active,
                 volatile,
+                PokemonVolatileStatus::PROTOSYNTHESISBOOSTER,
                 instructions,
                 attacking_side,
                 side_ref,
@@ -1562,66 +1872,103 @@ pub fn ability_on_switch_in(
         }
         Abilities::QUARKDRIVE => {
             let electric_terrain_is_active = state.terrain_is_active(&Terrain::ELECTRICTERRAIN);
+            let item_is_active = state.active_item_is_active(side_ref);
             let attacking_side = state.get_side(side_ref);
             let volatile = quarkdrive_volatile_from_side(&attacking_side);
             protosynthesus_or_quarkdrive_on_switch_in(
                 electric_terrain_is_active,
+                item_is_active,
                 volatile,
+                PokemonVolatileStatus::QUARKDRIVEBOOSTER,
                 instructions,
                 attacking_side,
                 side_ref,
             );
         }
         Abilities::EMBODYASPECTTEAL => {
-            apply_boost_instruction(
+            apply_boost_instruction_with_effective(
                 attacking_side,
                 &PokemonBoostableStat::Speed,
                 &1,
                 side_ref,
                 side_ref,
+                active_ability,
+                active_item_is_active,
                 instructions,
             );
         }
         Abilities::EMBODYASPECTWELLSPRING => {
-            apply_boost_instruction(
+            apply_boost_instruction_with_effective(
                 attacking_side,
                 &PokemonBoostableStat::SpecialDefense,
                 &1,
                 side_ref,
                 side_ref,
+                active_ability,
+                active_item_is_active,
                 instructions,
             );
         }
         Abilities::EMBODYASPECTCORNERSTONE => {
-            apply_boost_instruction(
+            apply_boost_instruction_with_effective(
                 attacking_side,
                 &PokemonBoostableStat::Defense,
                 &1,
                 side_ref,
                 side_ref,
+                active_ability,
+                active_item_is_active,
                 instructions,
             );
         }
         Abilities::EMBODYASPECTHEARTHFLAME => {
-            apply_boost_instruction(
+            apply_boost_instruction_with_effective(
                 attacking_side,
                 &PokemonBoostableStat::Attack,
                 &1,
                 side_ref,
                 side_ref,
+                active_ability,
+                active_item_is_active,
                 instructions,
             );
         }
         Abilities::INTREPIDSWORD => {
-            // no need to check for boost at +6 because we are switching in
-            attacking_side.attack_boost += 1;
-            instructions
-                .instruction_list
-                .push(Instruction::Boost(BoostInstruction {
-                    side_ref: *side_ref,
-                    stat: PokemonBoostableStat::Attack,
-                    amount: 1,
-                }));
+            #[cfg(feature = "gen9")]
+            if !active_pkmn.sword_boost_used {
+                instructions
+                    .instruction_list
+                    .push(Instruction::ToggleSwordBoostUsed(
+                        ToggleAbilityOnStartFlagInstruction {
+                            side_ref: *side_ref,
+                            pokemon_index: active_index,
+                        },
+                    ));
+                active_pkmn.sword_boost_used = true;
+                apply_boost_instruction_with_effective(
+                    attacking_side,
+                    &PokemonBoostableStat::Attack,
+                    &1,
+                    side_ref,
+                    side_ref,
+                    active_ability,
+                    active_item_is_active,
+                    instructions,
+                );
+            }
+            #[cfg(not(feature = "gen9"))]
+            {
+                apply_boost_instruction_with_effective(
+                    attacking_side,
+                    &PokemonBoostableStat::Attack,
+                    &1,
+                    side_ref,
+                    side_ref,
+                    active_ability,
+                    active_item_is_active,
+                    instructions,
+                );
+            }
         }
         Abilities::SLOWSTART => {
             instructions
@@ -1647,7 +1994,7 @@ pub fn ability_on_switch_in(
             attacking_side.volatile_status_durations.slowstart = 6;
         }
         Abilities::DROUGHT | Abilities::ORICHALCUMPULSE => {
-            if state.weather.weather_type != Weather::SUN {
+            if regular_weather_should_be_set(state, Weather::SUN) {
                 instructions
                     .instruction_list
                     .push(Instruction::ChangeWeather(ChangeWeather {
@@ -1661,7 +2008,7 @@ pub fn ability_on_switch_in(
             }
         }
         Abilities::DESOLATELAND => {
-            if state.weather.weather_type != Weather::HARSHSUN {
+            if weather_should_be_set(state, Weather::HARSHSUN) {
                 instructions
                     .instruction_list
                     .push(Instruction::ChangeWeather(ChangeWeather {
@@ -1675,7 +2022,7 @@ pub fn ability_on_switch_in(
             }
         }
         Abilities::MISTYSURGE => {
-            if state.terrain.terrain_type != Terrain::MISTYTERRAIN {
+            if terrain_should_be_set(state, Terrain::MISTYTERRAIN) {
                 instructions
                     .instruction_list
                     .push(Instruction::ChangeTerrain(ChangeTerrain {
@@ -1689,7 +2036,7 @@ pub fn ability_on_switch_in(
             }
         }
         Abilities::SANDSTREAM => {
-            if state.weather.weather_type != Weather::SAND {
+            if regular_weather_should_be_set(state, Weather::SAND) {
                 instructions
                     .instruction_list
                     .push(Instruction::ChangeWeather(ChangeWeather {
@@ -1704,30 +2051,34 @@ pub fn ability_on_switch_in(
         }
         Abilities::INTIMIDATE => {
             let defender = defending_side.get_active_immutable();
-            if !(defender.ability == Abilities::OWNTEMPO
-                || defender.ability == Abilities::OBLIVIOUS
-                || defender.ability == Abilities::INNERFOCUS
-                || defender.ability == Abilities::SCRAPPY
+            if !(defender_ability == Abilities::OWNTEMPO
+                || defender_ability == Abilities::OBLIVIOUS
+                || defender_ability == Abilities::INNERFOCUS
+                || defender_ability == Abilities::SCRAPPY
                 || defending_side
                     .volatile_statuses
                     .contains(&PokemonVolatileStatus::SUBSTITUTE))
             {
-                if apply_boost_instruction(
+                if apply_boost_instruction_with_effective(
                     defending_side,
                     &PokemonBoostableStat::Attack,
                     &-1,
                     side_ref,
                     &side_ref.get_other_side(),
+                    defender_ability,
+                    defender_item_is_active,
                     instructions,
                 ) {
                     let defender = defending_side.get_active_immutable();
-                    if defender.item == Items::ADRENALINEORB {
-                        if apply_boost_instruction(
+                    if defender.item == Items::ADRENALINEORB && defender_item_is_active {
+                        if apply_boost_instruction_with_effective(
                             defending_side,
                             &PokemonBoostableStat::Speed,
                             &1,
                             &side_ref.get_other_side(),
                             &side_ref.get_other_side(),
+                            defender_ability,
+                            defender_item_is_active,
                             instructions,
                         ) {
                             let adrenaline_orb_item_instruction =
@@ -1746,18 +2097,44 @@ pub fn ability_on_switch_in(
             }
         }
         Abilities::DAUNTLESSSHIELD => {
-            // no need to check for boost at +6 because we are switching in
-            attacking_side.defense_boost += 1;
-            instructions
-                .instruction_list
-                .push(Instruction::Boost(BoostInstruction {
-                    side_ref: *side_ref,
-                    stat: PokemonBoostableStat::Defense,
-                    amount: 1,
-                }));
+            #[cfg(feature = "gen9")]
+            if !active_pkmn.shield_boost_used {
+                instructions
+                    .instruction_list
+                    .push(Instruction::ToggleShieldBoostUsed(
+                        ToggleAbilityOnStartFlagInstruction {
+                            side_ref: *side_ref,
+                            pokemon_index: active_index,
+                        },
+                    ));
+                active_pkmn.shield_boost_used = true;
+                apply_boost_instruction_with_effective(
+                    attacking_side,
+                    &PokemonBoostableStat::Defense,
+                    &1,
+                    side_ref,
+                    side_ref,
+                    active_ability,
+                    active_item_is_active,
+                    instructions,
+                );
+            }
+            #[cfg(not(feature = "gen9"))]
+            {
+                apply_boost_instruction_with_effective(
+                    attacking_side,
+                    &PokemonBoostableStat::Defense,
+                    &1,
+                    side_ref,
+                    side_ref,
+                    active_ability,
+                    active_item_is_active,
+                    instructions,
+                );
+            }
         }
         Abilities::GRASSYSURGE => {
-            if state.terrain.terrain_type != Terrain::GRASSYTERRAIN {
+            if terrain_should_be_set(state, Terrain::GRASSYTERRAIN) {
                 instructions
                     .instruction_list
                     .push(Instruction::ChangeTerrain(ChangeTerrain {
@@ -1771,7 +2148,7 @@ pub fn ability_on_switch_in(
             }
         }
         Abilities::ELECTRICSURGE | Abilities::HADRONENGINE => {
-            if state.terrain.terrain_type != Terrain::ELECTRICTERRAIN {
+            if terrain_should_be_set(state, Terrain::ELECTRICTERRAIN) {
                 instructions
                     .instruction_list
                     .push(Instruction::ChangeTerrain(ChangeTerrain {
@@ -1788,27 +2165,31 @@ pub fn ability_on_switch_in(
             if defending_side.calculate_boosted_stat(PokemonBoostableStat::Defense)
                 < defending_side.calculate_boosted_stat(PokemonBoostableStat::SpecialDefense)
             {
-                apply_boost_instruction(
+                apply_boost_instruction_with_effective(
                     attacking_side,
                     &PokemonBoostableStat::Attack,
                     &1,
                     side_ref,
                     side_ref,
+                    active_ability,
+                    active_item_is_active,
                     instructions,
                 );
             } else {
-                apply_boost_instruction(
+                apply_boost_instruction_with_effective(
                     attacking_side,
                     &PokemonBoostableStat::SpecialAttack,
                     &1,
                     side_ref,
                     side_ref,
+                    active_ability,
+                    active_item_is_active,
                     instructions,
                 );
             }
         }
         Abilities::PRIMORDIALSEA => {
-            if state.weather.weather_type != Weather::HEAVYRAIN {
+            if weather_should_be_set(state, Weather::HEAVYRAIN) {
                 instructions
                     .instruction_list
                     .push(Instruction::ChangeWeather(ChangeWeather {
@@ -1901,7 +2282,7 @@ pub fn ability_on_switch_in(
             #[cfg(not(feature = "gen9"))]
             let weather_type = Weather::HAIL;
 
-            if state.weather.weather_type != weather_type {
+            if regular_weather_should_be_set(state, weather_type) {
                 instructions
                     .instruction_list
                     .push(Instruction::ChangeWeather(ChangeWeather {
@@ -1915,7 +2296,7 @@ pub fn ability_on_switch_in(
             }
         }
         Abilities::PSYCHICSURGE => {
-            if state.terrain.terrain_type != Terrain::PSYCHICTERRAIN {
+            if terrain_should_be_set(state, Terrain::PSYCHICTERRAIN) {
                 instructions
                     .instruction_list
                     .push(Instruction::ChangeTerrain(ChangeTerrain {
@@ -1929,7 +2310,7 @@ pub fn ability_on_switch_in(
             }
         }
         Abilities::DRIZZLE => {
-            if state.weather.weather_type != Weather::RAIN {
+            if regular_weather_should_be_set(state, Weather::RAIN) {
                 instructions
                     .instruction_list
                     .push(Instruction::ChangeWeather(ChangeWeather {
@@ -1946,15 +2327,25 @@ pub fn ability_on_switch_in(
     }
 }
 
+pub fn ability_on_switch_in(
+    state: &mut State,
+    side_ref: &SideReference,
+    instructions: &mut StateInstructions,
+) {
+    ability_on_start(state, side_ref, instructions);
+}
+
 pub fn ability_modify_attack_being_used(
     state: &State,
     attacker_choice: &mut Choice,
     defender_choice: &Choice,
     attacking_side_ref: &SideReference,
 ) {
+    let defending_side_ref = attacking_side_ref.get_other_side();
+    let defending_ability = state.active_ability(&defending_side_ref);
     let (attacking_side, defending_side) = state.get_both_sides_immutable(attacking_side_ref);
     let attacking_pkmn = attacking_side.get_active_immutable();
-    if defending_side.get_active_immutable().ability == Abilities::NEUTRALIZINGGAS {
+    if state.active_ability_is_suppressed(attacking_side_ref) {
         return;
     }
     match attacking_pkmn.ability {
@@ -1995,14 +2386,15 @@ pub fn ability_modify_attack_being_used(
         }
         Abilities::HADRONENGINE => {
             if attacker_choice.category == MoveCategory::Special
-                && state.terrain.terrain_type == Terrain::ELECTRICTERRAIN
+                && state.terrain_is_active(&Terrain::ELECTRICTERRAIN)
             {
                 attacker_choice.base_power *= 1.33;
             }
         }
         Abilities::ORICHALCUMPULSE => {
             if attacker_choice.category == MoveCategory::Physical
-                && state.weather.weather_type == Weather::SUN
+                && (state.weather_is_active(&Weather::SUN)
+                    || state.weather_is_active(&Weather::HARSHSUN))
             {
                 attacker_choice.base_power *= 1.33;
             }
@@ -2142,13 +2534,14 @@ pub fn ability_modify_attack_being_used(
             }
         }
         Abilities::SOLARPOWER => {
-            if state.weather_is_active(&Weather::SUN) {
+            if state.weather_is_active(&Weather::SUN) || state.weather_is_active(&Weather::HARSHSUN)
+            {
                 attacker_choice.base_power *= 1.5;
             }
         }
         Abilities::FAIRYAURA => {
             if attacker_choice.move_type == PokemonType::FAIRY
-                && defending_side.get_active_immutable().ability != Abilities::AURABREAK
+                && defending_ability != Abilities::AURABREAK
             {
                 attacker_choice.base_power *= 1.33;
             }
@@ -2158,7 +2551,7 @@ pub fn ability_modify_attack_being_used(
         }
         Abilities::DARKAURA => {
             if attacker_choice.move_type == PokemonType::DARK
-                && defending_side.get_active_immutable().ability != Abilities::AURABREAK
+                && defending_ability != Abilities::AURABREAK
             {
                 attacker_choice.base_power *= 1.33;
             }
@@ -2287,10 +2680,14 @@ pub fn ability_modify_attack_being_used(
         Abilities::SHEERFORCE => {
             let mut sheer_force_volatile_boosted = false;
             if let Some(attacker_volatile_status) = &attacker_choice.volatile_status {
+                let is_soak_typechange_marker = attacker_choice.move_id == Choices::SOAK
+                    && attacker_volatile_status.volatile_status
+                        == PokemonVolatileStatus::TYPECHANGE;
                 if attacker_volatile_status.volatile_status
                     != PokemonVolatileStatus::PARTIALLYTRAPPED
                     && attacker_volatile_status.volatile_status != PokemonVolatileStatus::LOCKEDMOVE
                     && attacker_volatile_status.volatile_status != PokemonVolatileStatus::SMACKDOWN
+                    && !is_soak_typechange_marker
                 {
                     sheer_force_volatile_boosted = true;
                 }
@@ -2380,28 +2777,45 @@ pub fn ability_modify_attack_against(
     defender_choice: &Choice,
     attacking_side_ref: &SideReference,
 ) {
+    let target_side_ref = attacking_side_ref.get_other_side();
+    let attacking_ability_is_suppressed = state.active_ability_is_suppressed(attacking_side_ref);
+    let target_ability_is_suppressed = state.active_ability_is_suppressed(&target_side_ref);
     let (attacking_side, defending_side) = state.get_both_sides_immutable(attacking_side_ref);
     let attacking_pkmn = attacking_side.get_active_immutable();
     let target_pkmn = defending_side.get_active_immutable();
-    if target_pkmn.ability == Abilities::NEUTRALIZINGGAS
-        || attacker_choice.target == MoveTarget::User
-    {
+    if attacker_choice.target == MoveTarget::User {
         return;
     }
-    if (attacking_pkmn.ability == Abilities::MOLDBREAKER
+    let attacking_ability = if attacking_ability_is_suppressed {
+        Abilities::NONE
+    } else {
+        attacking_pkmn.ability
+    };
+    let target_ability = if target_ability_is_suppressed {
+        Abilities::NONE
+    } else {
+        target_pkmn.ability
+    };
+    if (attacking_ability == Abilities::MOLDBREAKER
         || attacker_choice.move_id == Choices::MOONGEISTBEAM
         || attacker_choice.move_id == Choices::PHOTONGEYSER
         || attacker_choice.move_id == Choices::SUNSTEELSTRIKE
-        || (attacking_pkmn.ability == Abilities::MYCELIUMMIGHT
+        || (attacking_ability == Abilities::MYCELIUMMIGHT
             && attacker_choice.category == MoveCategory::Status)
-        || attacking_pkmn.ability == Abilities::TERAVOLT
-        || attacking_pkmn.ability == Abilities::TURBOBLAZE)
-        && mold_breaker_ignores(&target_pkmn.ability)
+        || attacking_ability == Abilities::TERAVOLT
+        || attacking_ability == Abilities::TURBOBLAZE)
+        && state.active_ignores_target_ability(
+            attacking_side_ref,
+            &attacker_choice.move_id,
+            target_ability,
+            attacker_choice.category == MoveCategory::Status,
+        )
+        && mold_breaker_ignores(&target_ability)
     {
         return;
     }
 
-    match target_pkmn.ability {
+    match target_ability {
         Abilities::TABLETSOFRUIN => {
             if attacker_choice.category == MoveCategory::Physical {
                 attacker_choice.base_power *= 0.75;

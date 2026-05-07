@@ -253,6 +253,7 @@ define_enum_with_from_str! {
         DRAMPANITE,
         CHIMECHITE,
         CHANDELURITE,
+        ABILITYSHIELD,
     },
     default = UNKNOWNITEM
 }
@@ -275,26 +276,85 @@ pub fn get_choice_move_disable_instructions(
     moves_to_disable
 }
 
+fn ability_blocks_foe_berries(ability: Abilities) -> bool {
+    matches!(
+        ability,
+        Abilities::UNNERVE | Abilities::ASONEGLASTRIER | Abilities::ASONESPECTRIER
+    )
+}
+
+pub fn opponent_blocks_berries(state: &State, side_ref: &SideReference) -> bool {
+    let blocker_side_ref = side_ref.get_other_side();
+    let blocker = state
+        .get_side_immutable(&blocker_side_ref)
+        .get_active_immutable();
+    ability_blocks_foe_berries(blocker.ability)
+        && !state.active_ability_is_suppressed(&blocker_side_ref)
+}
+
+fn cheek_pouch_heal(
+    side_ref: &SideReference,
+    active_pkmn: &mut Pokemon,
+    cheek_pouch_active: bool,
+    instructions: &mut StateInstructions,
+) {
+    if !cheek_pouch_active || active_pkmn.hp == 0 {
+        return;
+    }
+    let heal_amount = cmp::min(active_pkmn.maxhp / 3, active_pkmn.maxhp - active_pkmn.hp);
+    if heal_amount > 0 {
+        instructions
+            .instruction_list
+            .push(Instruction::Heal(HealInstruction {
+                side_ref: *side_ref,
+                heal_amount,
+            }));
+        active_pkmn.hp += heal_amount;
+    }
+}
+
+pub fn consume_berry(
+    side_ref: &SideReference,
+    active_pkmn: &mut Pokemon,
+    berry: Items,
+    cheek_pouch_active: bool,
+    instructions: &mut StateInstructions,
+) {
+    instructions
+        .instruction_list
+        .push(Instruction::ChangeItem(ChangeItemInstruction {
+            side_ref: *side_ref,
+            current_item: berry,
+            new_item: Items::NONE,
+        }));
+    active_pkmn.item = Items::NONE;
+    cheek_pouch_heal(side_ref, active_pkmn, cheek_pouch_active, instructions);
+}
+
 fn damage_reduction_berry(
     defending_pkmn: &mut Pokemon,
     attacking_side_ref: &SideReference,
     choice: &mut Choice,
     berry: Items,
     pkmn_type: &PokemonType,
+    berries_blocked: bool,
+    ripen_active: bool,
+    cheek_pouch_active: bool,
     instructions: &mut StateInstructions,
 ) {
-    if &choice.move_type == pkmn_type
+    if !berries_blocked
+        && &choice.move_type == pkmn_type
         && type_effectiveness_modifier(pkmn_type, &defending_pkmn) > 1.0
     {
-        instructions
-            .instruction_list
-            .push(Instruction::ChangeItem(ChangeItemInstruction {
-                side_ref: attacking_side_ref.get_other_side(),
-                current_item: berry,
-                new_item: Items::NONE,
-            }));
-        defending_pkmn.item = Items::NONE;
-        choice.final_damage_modifier *= 0.5;
+        let defender_side_ref = attacking_side_ref.get_other_side();
+        consume_berry(
+            &defender_side_ref,
+            defending_pkmn,
+            berry,
+            cheek_pouch_active,
+            instructions,
+        );
+        choice.final_damage_modifier *= if ripen_active { 0.25 } else { 0.5 };
     }
 }
 
@@ -339,6 +399,7 @@ Regarding berries:
 fn lum_berry(
     side_ref: &SideReference,
     attacking_side: &mut Side,
+    cheek_pouch_active: bool,
     instructions: &mut StateInstructions,
 ) {
     let active_index = attacking_side.active_index;
@@ -352,23 +413,28 @@ fn lum_berry(
             old_status: active_pkmn.status,
         }));
     active_pkmn.status = PokemonStatus::NONE;
-    instructions
-        .instruction_list
-        .push(Instruction::ChangeItem(ChangeItemInstruction {
-            side_ref: *side_ref,
-            current_item: Items::LUMBERRY,
-            new_item: Items::NONE,
-        }));
-    active_pkmn.item = Items::NONE;
+    consume_berry(
+        side_ref,
+        active_pkmn,
+        Items::LUMBERRY,
+        cheek_pouch_active,
+        instructions,
+    );
 }
 
 fn sitrus_berry(
     side_ref: &SideReference,
     attacking_side: &mut Side,
+    ripen_active: bool,
+    cheek_pouch_active: bool,
     instructions: &mut StateInstructions,
 ) {
     let active_pkmn = attacking_side.get_active();
-    let heal_amount = cmp::min(active_pkmn.maxhp / 4, active_pkmn.maxhp - active_pkmn.hp);
+    let heal_fraction = if ripen_active { 2 } else { 4 };
+    let heal_amount = cmp::min(
+        active_pkmn.maxhp / heal_fraction,
+        active_pkmn.maxhp - active_pkmn.hp,
+    );
     instructions
         .instruction_list
         .push(Instruction::Heal(HealInstruction {
@@ -376,31 +442,30 @@ fn sitrus_berry(
             heal_amount: heal_amount,
         }));
     active_pkmn.hp += heal_amount;
-    instructions
-        .instruction_list
-        .push(Instruction::ChangeItem(ChangeItemInstruction {
-            side_ref: *side_ref,
-            current_item: Items::SITRUSBERRY,
-            new_item: Items::NONE,
-        }));
-    active_pkmn.item = Items::NONE;
+    consume_berry(
+        side_ref,
+        active_pkmn,
+        Items::SITRUSBERRY,
+        cheek_pouch_active,
+        instructions,
+    );
 }
 
 fn chesto_berry(
     side_ref: &SideReference,
     attacking_side: &mut Side,
+    cheek_pouch_active: bool,
     instructions: &mut StateInstructions,
 ) {
     let active_index = attacking_side.active_index;
     let active_pkmn = attacking_side.get_active();
-    instructions
-        .instruction_list
-        .push(Instruction::ChangeItem(ChangeItemInstruction {
-            side_ref: *side_ref,
-            current_item: Items::CHESTOBERRY,
-            new_item: Items::NONE,
-        }));
-    active_pkmn.item = Items::NONE;
+    consume_berry(
+        side_ref,
+        active_pkmn,
+        Items::CHESTOBERRY,
+        cheek_pouch_active,
+        instructions,
+    );
     add_remove_status_instructions(instructions, active_index, *side_ref, attacking_side);
 }
 
@@ -410,23 +475,20 @@ fn boost_berry(
     stat: PokemonBoostableStat,
     instructions: &mut StateInstructions,
 ) {
+    let ripen_active = state.active_ability_is_active(side_ref, Abilities::RIPEN);
+    let cheek_pouch_active = state.active_ability_is_active(side_ref, Abilities::CHEEKPOUCH);
+    let boost_amount = if ripen_active { 2 } else { 1 };
     apply_boost_instruction(
-        state.get_side(side_ref),
+        state,
         &stat,
-        &1,
+        &boost_amount,
         side_ref,
         side_ref,
         instructions,
     );
     let attacker = state.get_side(side_ref).get_active();
-    instructions
-        .instruction_list
-        .push(Instruction::ChangeItem(ChangeItemInstruction {
-            side_ref: *side_ref,
-            current_item: attacker.item,
-            new_item: Items::NONE,
-        }));
-    attacker.item = Items::NONE;
+    let berry = attacker.item;
+    consume_berry(side_ref, attacker, berry, cheek_pouch_active, instructions);
 }
 
 pub fn item_before_move(
@@ -435,16 +497,35 @@ pub fn item_before_move(
     side_ref: &SideReference,
     instructions: &mut StateInstructions,
 ) {
+    let defending_berries_blocked = opponent_blocks_berries(state, &side_ref.get_other_side());
+    let active_berries_blocked = opponent_blocks_berries(state, side_ref);
+    let defending_side_ref = side_ref.get_other_side();
+    let active_item_is_active = state.active_item_is_active(side_ref);
+    let defending_item_is_active = state.active_item_is_active(&defending_side_ref);
+    let active_cheek_pouch_active = state.active_ability_is_active(side_ref, Abilities::CHEEKPOUCH);
+    let active_ripen_active = state.active_ability_is_active(side_ref, Abilities::RIPEN);
+    let active_gluttony_active = state.active_ability_is_active(side_ref, Abilities::GLUTTONY);
+    let defending_cheek_pouch_active =
+        state.active_ability_is_active(&defending_side_ref, Abilities::CHEEKPOUCH);
+    let defending_ripen_active =
+        state.active_ability_is_active(&defending_side_ref, Abilities::RIPEN);
     let (attacking_side, defending_side) = state.get_both_sides(side_ref);
     let active_pkmn = attacking_side.get_active();
     let defending_pkmn = defending_side.get_active();
-    match defending_pkmn.item {
+    match if defending_item_is_active {
+        defending_pkmn.item
+    } else {
+        Items::NONE
+    } {
         Items::CHOPLEBERRY => damage_reduction_berry(
             defending_pkmn,
             side_ref,
             choice,
             Items::CHOPLEBERRY,
             &PokemonType::FIGHTING,
+            defending_berries_blocked,
+            defending_ripen_active,
+            defending_cheek_pouch_active,
             instructions,
         ),
         Items::BABIRIBERRY => damage_reduction_berry(
@@ -453,6 +534,9 @@ pub fn item_before_move(
             choice,
             Items::BABIRIBERRY,
             &PokemonType::STEEL,
+            defending_berries_blocked,
+            defending_ripen_active,
+            defending_cheek_pouch_active,
             instructions,
         ),
         Items::CHARTIBERRY => damage_reduction_berry(
@@ -461,20 +545,23 @@ pub fn item_before_move(
             choice,
             Items::CHARTIBERRY,
             &PokemonType::ROCK,
+            defending_berries_blocked,
+            defending_ripen_active,
+            defending_cheek_pouch_active,
             instructions,
         ),
         Items::CHILANBERRY => {
             // no type effectiveness check for chilan
-            if &choice.move_type == &PokemonType::NORMAL {
-                instructions.instruction_list.push(Instruction::ChangeItem(
-                    ChangeItemInstruction {
-                        side_ref: side_ref.get_other_side(),
-                        current_item: Items::CHILANBERRY,
-                        new_item: Items::NONE,
-                    },
-                ));
-                defending_pkmn.item = Items::NONE;
-                choice.final_damage_modifier *= 0.5;
+            if !defending_berries_blocked && &choice.move_type == &PokemonType::NORMAL {
+                let defender_side_ref = side_ref.get_other_side();
+                consume_berry(
+                    &defender_side_ref,
+                    defending_pkmn,
+                    Items::CHILANBERRY,
+                    defending_cheek_pouch_active,
+                    instructions,
+                );
+                choice.final_damage_modifier *= if defending_ripen_active { 0.25 } else { 0.5 };
             }
         }
         Items::COBABERRY => damage_reduction_berry(
@@ -483,6 +570,9 @@ pub fn item_before_move(
             choice,
             Items::COBABERRY,
             &PokemonType::FLYING,
+            defending_berries_blocked,
+            defending_ripen_active,
+            defending_cheek_pouch_active,
             instructions,
         ),
         Items::COLBURBERRY => damage_reduction_berry(
@@ -491,6 +581,9 @@ pub fn item_before_move(
             choice,
             Items::COLBURBERRY,
             &PokemonType::DARK,
+            defending_berries_blocked,
+            defending_ripen_active,
+            defending_cheek_pouch_active,
             instructions,
         ),
         Items::HABANBERRY => damage_reduction_berry(
@@ -499,6 +592,9 @@ pub fn item_before_move(
             choice,
             Items::HABANBERRY,
             &PokemonType::DRAGON,
+            defending_berries_blocked,
+            defending_ripen_active,
+            defending_cheek_pouch_active,
             instructions,
         ),
         Items::KASIBBERRY => damage_reduction_berry(
@@ -507,6 +603,9 @@ pub fn item_before_move(
             choice,
             Items::KASIBBERRY,
             &PokemonType::GHOST,
+            defending_berries_blocked,
+            defending_ripen_active,
+            defending_cheek_pouch_active,
             instructions,
         ),
         Items::KEBIABERRY => damage_reduction_berry(
@@ -515,6 +614,9 @@ pub fn item_before_move(
             choice,
             Items::KEBIABERRY,
             &PokemonType::POISON,
+            defending_berries_blocked,
+            defending_ripen_active,
+            defending_cheek_pouch_active,
             instructions,
         ),
         Items::OCCABERRY => damage_reduction_berry(
@@ -523,6 +625,9 @@ pub fn item_before_move(
             choice,
             Items::OCCABERRY,
             &PokemonType::FIRE,
+            defending_berries_blocked,
+            defending_ripen_active,
+            defending_cheek_pouch_active,
             instructions,
         ),
         Items::PASSHOBERRY => damage_reduction_berry(
@@ -531,6 +636,9 @@ pub fn item_before_move(
             choice,
             Items::PASSHOBERRY,
             &PokemonType::WATER,
+            defending_berries_blocked,
+            defending_ripen_active,
+            defending_cheek_pouch_active,
             instructions,
         ),
         Items::PAYAPABERRY => damage_reduction_berry(
@@ -539,6 +647,9 @@ pub fn item_before_move(
             choice,
             Items::PAYAPABERRY,
             &PokemonType::PSYCHIC,
+            defending_berries_blocked,
+            defending_ripen_active,
+            defending_cheek_pouch_active,
             instructions,
         ),
         Items::RINDOBERRY => damage_reduction_berry(
@@ -547,6 +658,9 @@ pub fn item_before_move(
             choice,
             Items::RINDOBERRY,
             &PokemonType::GRASS,
+            defending_berries_blocked,
+            defending_ripen_active,
+            defending_cheek_pouch_active,
             instructions,
         ),
         Items::ROSELIBERRY => damage_reduction_berry(
@@ -555,6 +669,9 @@ pub fn item_before_move(
             choice,
             Items::ROSELIBERRY,
             &PokemonType::FAIRY,
+            defending_berries_blocked,
+            defending_ripen_active,
+            defending_cheek_pouch_active,
             instructions,
         ),
         Items::SHUCABERRY => damage_reduction_berry(
@@ -563,6 +680,9 @@ pub fn item_before_move(
             choice,
             Items::SHUCABERRY,
             &PokemonType::GROUND,
+            defending_berries_blocked,
+            defending_ripen_active,
+            defending_cheek_pouch_active,
             instructions,
         ),
         Items::TANGABERRY => damage_reduction_berry(
@@ -571,6 +691,9 @@ pub fn item_before_move(
             choice,
             Items::TANGABERRY,
             &PokemonType::BUG,
+            defending_berries_blocked,
+            defending_ripen_active,
+            defending_cheek_pouch_active,
             instructions,
         ),
         Items::WACANBERRY => damage_reduction_berry(
@@ -579,6 +702,9 @@ pub fn item_before_move(
             choice,
             Items::WACANBERRY,
             &PokemonType::ELECTRIC,
+            defending_berries_blocked,
+            defending_ripen_active,
+            defending_cheek_pouch_active,
             instructions,
         ),
         Items::YACHEBERRY => damage_reduction_berry(
@@ -587,11 +713,18 @@ pub fn item_before_move(
             choice,
             Items::YACHEBERRY,
             &PokemonType::ICE,
+            defending_berries_blocked,
+            defending_ripen_active,
+            defending_cheek_pouch_active,
             instructions,
         ),
         _ => {}
     }
-    match active_pkmn.item {
+    match if active_item_is_active {
+        active_pkmn.item
+    } else {
+        Items::NONE
+    } {
         Items::NORMALGEM => power_up_gem(
             side_ref,
             active_pkmn,
@@ -718,31 +851,64 @@ pub fn item_before_move(
             PokemonType::FAIRY,
             instructions,
         ),
-        Items::LUMBERRY if active_pkmn.status != PokemonStatus::NONE => {
-            lum_berry(side_ref, attacking_side, instructions)
+        Items::LUMBERRY if !active_berries_blocked && active_pkmn.status != PokemonStatus::NONE => {
+            lum_berry(
+                side_ref,
+                attacking_side,
+                active_cheek_pouch_active,
+                instructions,
+            )
         }
         Items::SITRUSBERRY
-            if active_pkmn.ability == Abilities::GLUTTONY
+            if !active_berries_blocked
+                && active_gluttony_active
                 && active_pkmn.hp <= active_pkmn.maxhp / 2 =>
         {
-            sitrus_berry(side_ref, attacking_side, instructions)
+            sitrus_berry(
+                side_ref,
+                attacking_side,
+                active_ripen_active,
+                active_cheek_pouch_active,
+                instructions,
+            )
         }
-        Items::SITRUSBERRY if active_pkmn.hp <= active_pkmn.maxhp / 4 => {
-            sitrus_berry(side_ref, attacking_side, instructions)
+        Items::SITRUSBERRY
+            if !active_berries_blocked && active_pkmn.hp <= active_pkmn.maxhp / 4 =>
+        {
+            sitrus_berry(
+                side_ref,
+                attacking_side,
+                active_ripen_active,
+                active_cheek_pouch_active,
+                instructions,
+            )
         }
-        Items::CHESTOBERRY if active_pkmn.status == PokemonStatus::SLEEP => {
-            chesto_berry(side_ref, attacking_side, instructions)
+        Items::CHESTOBERRY
+            if !active_berries_blocked && active_pkmn.status == PokemonStatus::SLEEP =>
+        {
+            chesto_berry(
+                side_ref,
+                attacking_side,
+                active_cheek_pouch_active,
+                instructions,
+            )
         }
-        Items::PETAYABERRY if active_pkmn.hp <= active_pkmn.maxhp / 4 => boost_berry(
-            side_ref,
-            state,
-            PokemonBoostableStat::SpecialAttack,
-            instructions,
-        ),
-        Items::LIECHIBERRY if active_pkmn.hp <= active_pkmn.maxhp / 4 => {
+        Items::PETAYABERRY
+            if !active_berries_blocked && active_pkmn.hp <= active_pkmn.maxhp / 4 =>
+        {
+            boost_berry(
+                side_ref,
+                state,
+                PokemonBoostableStat::SpecialAttack,
+                instructions,
+            )
+        }
+        Items::LIECHIBERRY
+            if !active_berries_blocked && active_pkmn.hp <= active_pkmn.maxhp / 4 =>
+        {
             boost_berry(side_ref, state, PokemonBoostableStat::Attack, instructions)
         }
-        Items::SALACBERRY if active_pkmn.hp <= active_pkmn.maxhp / 4 => {
+        Items::SALACBERRY if !active_berries_blocked && active_pkmn.hp <= active_pkmn.maxhp / 4 => {
             boost_berry(side_ref, state, PokemonBoostableStat::Speed, instructions)
         }
         Items::CHOICESPECS | Items::CHOICEBAND | Items::CHOICESCARF => {
@@ -765,94 +931,56 @@ pub fn item_on_switch_in(
     instructions: &mut StateInstructions,
 ) {
     let active_terrain = state.get_terrain();
-    let switching_in_side = state.get_side(side_ref);
-    let switching_in_pkmn = switching_in_side.get_active_immutable();
-    match switching_in_pkmn.item {
+    let active_item_is_active = state.active_item_is_active(side_ref);
+    let switching_in_item = state
+        .get_side_immutable(side_ref)
+        .get_active_immutable()
+        .item;
+    if !active_item_is_active {
+        return;
+    }
+    let seed_boost = match switching_in_item {
         Items::ELECTRICSEED => {
             if active_terrain == Terrain::ELECTRICTERRAIN {
-                if apply_boost_instruction(
-                    switching_in_side,
-                    &PokemonBoostableStat::Defense,
-                    &1,
-                    side_ref,
-                    side_ref,
-                    instructions,
-                ) {
-                    state.get_side(side_ref).get_active().item = Items::NONE;
-                    instructions.instruction_list.push(Instruction::ChangeItem(
-                        ChangeItemInstruction {
-                            side_ref: side_ref.clone(),
-                            current_item: Items::ELECTRICSEED,
-                            new_item: Items::NONE,
-                        },
-                    ));
-                }
+                Some(PokemonBoostableStat::Defense)
+            } else {
+                None
             }
         }
         Items::GRASSYSEED => {
             if active_terrain == Terrain::GRASSYTERRAIN {
-                if apply_boost_instruction(
-                    switching_in_side,
-                    &PokemonBoostableStat::Defense,
-                    &1,
-                    side_ref,
-                    side_ref,
-                    instructions,
-                ) {
-                    state.get_side(side_ref).get_active().item = Items::NONE;
-                    instructions.instruction_list.push(Instruction::ChangeItem(
-                        ChangeItemInstruction {
-                            side_ref: side_ref.clone(),
-                            current_item: Items::GRASSYSEED,
-                            new_item: Items::NONE,
-                        },
-                    ));
-                }
+                Some(PokemonBoostableStat::Defense)
+            } else {
+                None
             }
         }
         Items::MISTYSEED => {
             if active_terrain == Terrain::MISTYTERRAIN {
-                if apply_boost_instruction(
-                    switching_in_side,
-                    &PokemonBoostableStat::SpecialDefense,
-                    &1,
-                    side_ref,
-                    side_ref,
-                    instructions,
-                ) {
-                    state.get_side(side_ref).get_active().item = Items::NONE;
-                    instructions.instruction_list.push(Instruction::ChangeItem(
-                        ChangeItemInstruction {
-                            side_ref: side_ref.clone(),
-                            current_item: Items::MISTYSEED,
-                            new_item: Items::NONE,
-                        },
-                    ));
-                }
+                Some(PokemonBoostableStat::SpecialDefense)
+            } else {
+                None
             }
         }
         Items::PSYCHICSEED => {
             if active_terrain == Terrain::PSYCHICTERRAIN {
-                if apply_boost_instruction(
-                    switching_in_side,
-                    &PokemonBoostableStat::SpecialDefense,
-                    &1,
-                    side_ref,
-                    side_ref,
-                    instructions,
-                ) {
-                    state.get_side(side_ref).get_active().item = Items::NONE;
-                    instructions.instruction_list.push(Instruction::ChangeItem(
-                        ChangeItemInstruction {
-                            side_ref: side_ref.clone(),
-                            current_item: Items::PSYCHICSEED,
-                            new_item: Items::NONE,
-                        },
-                    ));
-                }
+                Some(PokemonBoostableStat::SpecialDefense)
+            } else {
+                None
             }
         }
-        _ => {}
+        _ => None,
+    };
+    if let Some(stat) = seed_boost {
+        if apply_boost_instruction(state, &stat, &1, side_ref, side_ref, instructions) {
+            state.get_side(side_ref).get_active().item = Items::NONE;
+            instructions
+                .instruction_list
+                .push(Instruction::ChangeItem(ChangeItemInstruction {
+                    side_ref: side_ref.clone(),
+                    current_item: switching_in_item,
+                    new_item: Items::NONE,
+                }));
+        }
     }
 }
 
@@ -861,18 +989,46 @@ pub fn item_end_of_turn(
     side_ref: &SideReference,
     instructions: &mut StateInstructions,
 ) {
+    let active_berries_blocked = opponent_blocks_berries(state, side_ref);
+    let active_item_is_active = state.active_item_is_active(side_ref);
+    let active_cheek_pouch_active = state.active_ability_is_active(side_ref, Abilities::CHEEKPOUCH);
+    let active_ripen_active = state.active_ability_is_active(side_ref, Abilities::RIPEN);
     let attacking_side = state.get_side(side_ref);
     let source_index = attacking_side.active_index;
     let active_pkmn = attacking_side.get_active();
-    match active_pkmn.item {
-        Items::LUMBERRY if active_pkmn.status != PokemonStatus::NONE => {
-            lum_berry(side_ref, attacking_side, instructions)
+    match if active_item_is_active {
+        active_pkmn.item
+    } else {
+        Items::NONE
+    } {
+        Items::LUMBERRY if !active_berries_blocked && active_pkmn.status != PokemonStatus::NONE => {
+            lum_berry(
+                side_ref,
+                attacking_side,
+                active_cheek_pouch_active,
+                instructions,
+            )
         }
-        Items::SITRUSBERRY if active_pkmn.hp <= active_pkmn.maxhp / 2 => {
-            sitrus_berry(side_ref, attacking_side, instructions)
+        Items::SITRUSBERRY
+            if !active_berries_blocked && active_pkmn.hp <= active_pkmn.maxhp / 2 =>
+        {
+            sitrus_berry(
+                side_ref,
+                attacking_side,
+                active_ripen_active,
+                active_cheek_pouch_active,
+                instructions,
+            )
         }
-        Items::CHESTOBERRY if active_pkmn.status == PokemonStatus::SLEEP => {
-            chesto_berry(side_ref, attacking_side, instructions)
+        Items::CHESTOBERRY
+            if !active_berries_blocked && active_pkmn.status == PokemonStatus::SLEEP =>
+        {
+            chesto_berry(
+                side_ref,
+                attacking_side,
+                active_cheek_pouch_active,
+                instructions,
+            )
         }
         Items::BLACKSLUDGE => {
             if active_pkmn.has_type(&PokemonType::POISON) {
@@ -949,8 +1105,13 @@ pub fn item_modify_attack_against(
     attacking_choice: &mut Choice,
     attacking_side_ref: &SideReference,
 ) {
+    let defending_side_ref = attacking_side_ref.get_other_side();
+    if !state.active_item_is_active(&defending_side_ref) {
+        return;
+    }
     let (attacking_side, defending_side) = state.get_both_sides_immutable(attacking_side_ref);
-    match defending_side.get_active_immutable().item {
+    let defending_pkmn = defending_side.get_active_immutable();
+    match defending_pkmn.item {
         Items::ABSORBBULB => {
             if attacking_choice.move_type == PokemonType::WATER {
                 attacking_choice.add_or_create_secondaries(Secondary {
@@ -1030,10 +1191,7 @@ pub fn item_modify_attack_against(
         }
         Items::WEAKNESSPOLICY => {
             if attacking_choice.category != MoveCategory::Status
-                && type_effectiveness_modifier(
-                    &attacking_choice.move_type,
-                    &defending_side.get_active_immutable(),
-                ) > 1.0
+                && type_effectiveness_modifier(&attacking_choice.move_type, defending_pkmn) > 1.0
             {
                 attacking_choice.add_or_create_secondaries(Secondary {
                     chance: 100.0,
@@ -1055,8 +1213,7 @@ pub fn item_modify_attack_against(
             }
         }
         Items::SOULDEW => {
-            if defending_side.get_active_immutable().id == PokemonName::LATIOS
-                || defending_side.get_active_immutable().id == PokemonName::LATIAS
+            if defending_pkmn.id == PokemonName::LATIOS || defending_pkmn.id == PokemonName::LATIAS
             {
                 #[cfg(any(feature = "gen3", feature = "gen4", feature = "gen5", feature = "gen6"))]
                 if attacking_choice.category == MoveCategory::Special {
@@ -1073,21 +1230,27 @@ pub fn item_modify_attack_being_used(
     attacking_choice: &mut Choice,
     attacking_side_ref: &SideReference,
 ) {
+    if !state.active_item_is_active(attacking_side_ref) {
+        return;
+    }
+    let active_magic_guard_is_active =
+        state.active_ability_is_active(attacking_side_ref, Abilities::MAGICGUARD);
     let (attacking_side, defending_side) = state.get_both_sides_immutable(attacking_side_ref);
-    match attacking_side.get_active_immutable().item {
-        Items::WELLSPRINGMASK => match attacking_side.get_active_immutable().id {
+    let active_pkmn = attacking_side.get_active_immutable();
+    match active_pkmn.item {
+        Items::WELLSPRINGMASK => match active_pkmn.id {
             PokemonName::OGERPONWELLSPRING | PokemonName::OGERPONWELLSPRINGTERA => {
                 attacking_choice.base_power *= 1.2;
             }
             _ => {}
         },
-        Items::HEARTHFLAMEMASK => match attacking_side.get_active_immutable().id {
+        Items::HEARTHFLAMEMASK => match active_pkmn.id {
             PokemonName::OGERPONHEARTHFLAME | PokemonName::OGERPONHEARTHFLAMETERA => {
                 attacking_choice.base_power *= 1.2;
             }
             _ => {}
         },
-        Items::CORNERSTONEMASK => match attacking_side.get_active_immutable().id {
+        Items::CORNERSTONEMASK => match active_pkmn.id {
             PokemonName::OGERPONCORNERSTONE | PokemonName::OGERPONCORNERSTONETERA => {
                 attacking_choice.base_power *= 1.2;
             }
@@ -1204,7 +1367,7 @@ pub fn item_modify_attack_being_used(
                 if !defending_side
                     .volatile_statuses
                     .contains(&PokemonVolatileStatus::SUBSTITUTE)
-                    && attacking_side.get_active_immutable().ability != Abilities::MAGICGUARD
+                    && !active_magic_guard_is_active
                 {
                     attacking_choice.add_or_create_secondaries(Secondary {
                         chance: 100.0,
@@ -1214,7 +1377,7 @@ pub fn item_modify_attack_being_used(
                 }
 
                 #[cfg(not(feature = "gen4"))]
-                if attacking_side.get_active_immutable().ability != Abilities::MAGICGUARD {
+                if !active_magic_guard_is_active {
                     attacking_choice.add_or_create_secondaries(Secondary {
                         chance: 100.0,
                         effect: Effect::Heal(-0.1),

@@ -360,6 +360,9 @@ impl PokemonVolatileStatusSet {
             101 => Some(PokemonVolatileStatus::UNBURDEN),
             102 => Some(PokemonVolatileStatus::UPROAR),
             103 => Some(PokemonVolatileStatus::YAWN),
+            104 => Some(PokemonVolatileStatus::PROTOSYNTHESISBOOSTER),
+            105 => Some(PokemonVolatileStatus::QUARKDRIVEBOOSTER),
+            106 => Some(PokemonVolatileStatus::NEUTRALIZINGGASENDING),
             _ => None,
         }
     }
@@ -1082,6 +1085,8 @@ pub struct Pokemon {
     pub terastallized: bool,
     pub tera_type: PokemonType,
     pub mega_evolved: bool,
+    pub sword_boost_used: bool,
+    pub shield_boost_used: bool,
     pub moves: PokemonMoves,
 }
 
@@ -1149,6 +1154,8 @@ impl Default for Pokemon {
             terastallized: false,
             tera_type: PokemonType::NORMAL,
             mega_evolved: false,
+            sword_boost_used: false,
+            shield_boost_used: false,
             moves: PokemonMoves {
                 m0: Default::default(),
                 m1: Default::default(),
@@ -1211,7 +1218,7 @@ impl Pokemon {
             self.evs.0, self.evs.1, self.evs.2, self.evs.3, self.evs.4, self.evs.5
         );
         format!(
-            "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+            "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
             self.id,
             self.level,
             self.types.0.to_string(),
@@ -1242,6 +1249,8 @@ impl Pokemon {
             self.tera_type.to_string(),
             self.freeze_turns,
             self.mega_evolved,
+            self.sword_boost_used,
+            self.shield_boost_used,
         )
     }
 
@@ -1293,6 +1302,14 @@ impl Pokemon {
                 .unwrap_or(0),
             mega_evolved: split
                 .get(29)
+                .and_then(|value| value.parse::<bool>().ok())
+                .unwrap_or(false),
+            sword_boost_used: split
+                .get(30)
+                .and_then(|value| value.parse::<bool>().ok())
+                .unwrap_or(false),
+            shield_boost_used: split
+                .get(31)
                 .and_then(|value| value.parse::<bool>().ok())
                 .unwrap_or(false),
         }
@@ -2394,6 +2411,14 @@ impl State {
                     .into_iter()
                     .any(|p| p.mega_evolved);
             }
+            Instruction::ToggleSwordBoostUsed(instruction) => {
+                self.get_side(&instruction.side_ref).pokemon[&instruction.pokemon_index]
+                    .sword_boost_used ^= true;
+            }
+            Instruction::ToggleShieldBoostUsed(instruction) => {
+                self.get_side(&instruction.side_ref).pokemon[&instruction.pokemon_index]
+                    .shield_boost_used ^= true;
+            }
             Instruction::SetLastUsedMove(instruction) => {
                 self.set_last_used_move(&instruction.side_ref, instruction.last_used_move)
             }
@@ -2614,6 +2639,14 @@ impl State {
                     .pokemon
                     .into_iter()
                     .any(|p| p.mega_evolved);
+            }
+            Instruction::ToggleSwordBoostUsed(instruction) => {
+                self.get_side(&instruction.side_ref).pokemon[&instruction.pokemon_index]
+                    .sword_boost_used ^= true;
+            }
+            Instruction::ToggleShieldBoostUsed(instruction) => {
+                self.get_side(&instruction.side_ref).pokemon[&instruction.pokemon_index]
+                    .shield_boost_used ^= true;
             }
             Instruction::SetLastUsedMove(instruction) => {
                 self.set_last_used_move(&instruction.side_ref, instruction.previous_last_used_move)

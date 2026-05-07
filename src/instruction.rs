@@ -94,6 +94,8 @@ pub enum Instruction {
     ToggleSideTwoForceSwitch,
     ToggleTerastallized(ToggleTerastallizedInstruction),
     ToggleMegaEvolved(ToggleMegaEvolvedInstruction),
+    ToggleSwordBoostUsed(ToggleAbilityOnStartFlagInstruction),
+    ToggleShieldBoostUsed(ToggleAbilityOnStartFlagInstruction),
     TeamPreview(TeamPreviewInstruction),
 }
 
@@ -155,6 +157,8 @@ impl PartialEq for Instruction {
             (ToggleSideTwoForceSwitch, ToggleSideTwoForceSwitch) => true,
             (ToggleTerastallized(a), ToggleTerastallized(b)) => a == b,
             (ToggleMegaEvolved(a), ToggleMegaEvolved(b)) => a == b,
+            (ToggleSwordBoostUsed(a), ToggleSwordBoostUsed(b)) => a == b,
+            (ToggleShieldBoostUsed(a), ToggleShieldBoostUsed(b)) => a == b,
             (TeamPreview(a), TeamPreview(b)) => a == b,
             _ => false,
         }
@@ -377,6 +381,20 @@ impl fmt::Debug for Instruction {
                 write!(
                     f,
                     "ToggleMegaEvolved {:?}: {:?}",
+                    s.side_ref, s.pokemon_index
+                )
+            }
+            Instruction::ToggleSwordBoostUsed(s) => {
+                write!(
+                    f,
+                    "ToggleSwordBoostUsed {:?}: {:?}",
+                    s.side_ref, s.pokemon_index
+                )
+            }
+            Instruction::ToggleShieldBoostUsed(s) => {
+                write!(
+                    f,
+                    "ToggleShieldBoostUsed {:?}: {:?}",
                     s.side_ref, s.pokemon_index
                 )
             }
@@ -782,6 +800,12 @@ pub struct ToggleTerastallizedInstruction {
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct ToggleMegaEvolvedInstruction {
+    pub side_ref: SideReference,
+    pub pokemon_index: PokemonIndex,
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub struct ToggleAbilityOnStartFlagInstruction {
     pub side_ref: SideReference,
     pub pokemon_index: PokemonIndex,
 }

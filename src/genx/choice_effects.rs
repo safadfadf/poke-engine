@@ -1,6 +1,8 @@
 use super::abilities::Abilities;
 use super::damage_calc::type_effectiveness_modifier;
-use super::generate_instructions::{add_remove_status_instructions, apply_boost_instruction};
+use super::generate_instructions::{
+    add_remove_status_instructions, apply_boost_instruction_with_effective,
+};
 use super::items::{get_choice_move_disable_instructions, Items};
 use super::state::{PokemonVolatileStatus, Terrain, Weather};
 use crate::choices::{
@@ -34,14 +36,51 @@ const CHOICE_THAWS_USER: [Choices; 10] = [
     Choices::MATCHAGOTCHA,
 ];
 
-fn move_weather_for_attacker(
-    state: &State,
-    attacking_side: &Side,
-    defending_side: &Side,
-) -> Weather {
-    let defending_ability = defending_side.get_active_immutable().ability;
-    if attacking_side.get_active_immutable().ability == Abilities::MEGASOL
-        && defending_ability != Abilities::NEUTRALIZINGGAS
+fn blocks_non_forced_type_change(pokemon_name: PokemonName) -> bool {
+    matches!(
+        pokemon_name,
+        PokemonName::ARCEUS
+            | PokemonName::ARCEUSBUG
+            | PokemonName::ARCEUSDARK
+            | PokemonName::ARCEUSDRAGON
+            | PokemonName::ARCEUSELECTRIC
+            | PokemonName::ARCEUSFAIRY
+            | PokemonName::ARCEUSFIGHTING
+            | PokemonName::ARCEUSFIRE
+            | PokemonName::ARCEUSFLYING
+            | PokemonName::ARCEUSGHOST
+            | PokemonName::ARCEUSGRASS
+            | PokemonName::ARCEUSGROUND
+            | PokemonName::ARCEUSICE
+            | PokemonName::ARCEUSPOISON
+            | PokemonName::ARCEUSPSYCHIC
+            | PokemonName::ARCEUSROCK
+            | PokemonName::ARCEUSSTEEL
+            | PokemonName::ARCEUSWATER
+            | PokemonName::SILVALLY
+            | PokemonName::SILVALLYBUG
+            | PokemonName::SILVALLYDARK
+            | PokemonName::SILVALLYDRAGON
+            | PokemonName::SILVALLYELECTRIC
+            | PokemonName::SILVALLYFAIRY
+            | PokemonName::SILVALLYFIGHTING
+            | PokemonName::SILVALLYFIRE
+            | PokemonName::SILVALLYFLYING
+            | PokemonName::SILVALLYGHOST
+            | PokemonName::SILVALLYGRASS
+            | PokemonName::SILVALLYGROUND
+            | PokemonName::SILVALLYICE
+            | PokemonName::SILVALLYPOISON
+            | PokemonName::SILVALLYPSYCHIC
+            | PokemonName::SILVALLYROCK
+            | PokemonName::SILVALLYSTEEL
+            | PokemonName::SILVALLYWATER
+    )
+}
+
+fn move_weather_for_attacker(state: &State, attacking_side_ref: &SideReference) -> Weather {
+    let defending_ability = state.active_ability(&attacking_side_ref.get_other_side());
+    if state.active_ability_is_active(attacking_side_ref, Abilities::MEGASOL)
         && defending_ability != Abilities::CLOUDNINE
         && defending_ability != Abilities::AIRLOCK
     {
@@ -64,6 +103,26 @@ fn move_weather_for_attacker(
     Weather::NONE
 }
 
+fn set_regular_weather(
+    state: &mut State,
+    instructions: &mut StateInstructions,
+    weather: Weather,
+    turns_remaining: i8,
+) {
+    if state.regular_weather_should_be_set(weather) {
+        instructions
+            .instruction_list
+            .push(Instruction::ChangeWeather(ChangeWeather {
+                new_weather: weather,
+                new_weather_turns_remaining: turns_remaining,
+                previous_weather: state.weather.weather_type,
+                previous_weather_turns_remaining: state.weather.turns_remaining,
+            }));
+        state.weather.weather_type = weather;
+        state.weather.turns_remaining = turns_remaining;
+    }
+}
+
 pub fn modify_choice(
     state: &State,
     attacker_choice: &mut Choice,
@@ -71,7 +130,7 @@ pub fn modify_choice(
     attacking_side_ref: &SideReference,
 ) {
     let (attacking_side, defending_side) = state.get_both_sides_immutable(attacking_side_ref);
-    let attacker_move_weather = move_weather_for_attacker(state, attacking_side, defending_side);
+    let attacker_move_weather = move_weather_for_attacker(state, attacking_side_ref);
     match attacker_choice.move_id {
         Choices::ROOST => {
             let attacker = attacking_side.get_active_immutable();
@@ -88,17 +147,17 @@ pub fn modify_choice(
             // percentages are a hack and are incorrect in situations
             // where one or more status effects are not possible
             attacker_choice.add_or_create_secondaries(Secondary {
-                chance: 10.00,
+                chance: 16.67,
                 target: MoveTarget::Opponent,
                 effect: Effect::Status(PokemonStatus::POISON),
             });
             attacker_choice.add_or_create_secondaries(Secondary {
-                chance: 11.11,
+                chance: 20.00,
                 target: MoveTarget::Opponent,
                 effect: Effect::Status(PokemonStatus::PARALYZE),
             });
             attacker_choice.add_or_create_secondaries(Secondary {
-                chance: 12.5,
+                chance: 25.0,
                 target: MoveTarget::Opponent,
                 effect: Effect::Status(PokemonStatus::SLEEP),
             });
@@ -218,7 +277,7 @@ pub fn modify_choice(
             }
         }
         Choices::EXPANDINGFORCE => {
-            if state.terrain.terrain_type == Terrain::PSYCHICTERRAIN {
+            if state.terrain_is_active(&Terrain::PSYCHICTERRAIN) {
                 attacker_choice.base_power *= 1.5;
             }
         }
@@ -278,7 +337,7 @@ pub fn modify_choice(
             attacker_choice.move_type = attacking_side.get_active_immutable().types.0;
         }
         Choices::MISTYEXPLOSION => {
-            if state.terrain.terrain_type == Terrain::MISTYTERRAIN {
+            if state.terrain_is_active(&Terrain::MISTYTERRAIN) {
                 attacker_choice.base_power *= 1.5;
             }
         }
@@ -324,7 +383,7 @@ pub fn modify_choice(
             }
         }
         Choices::PSYBLADE => {
-            if state.terrain.terrain_type == Terrain::ELECTRICTERRAIN {
+            if state.terrain_is_active(&Terrain::ELECTRICTERRAIN) {
                 attacker_choice.base_power *= 1.5;
             }
         }
@@ -341,7 +400,7 @@ pub fn modify_choice(
             }
         }
         Choices::RISINGVOLTAGE => {
-            if state.terrain.terrain_type == Terrain::ELECTRICTERRAIN {
+            if state.terrain_is_active(&Terrain::ELECTRICTERRAIN) {
                 attacker_choice.base_power *= 1.5;
             }
         }
@@ -354,7 +413,7 @@ pub fn modify_choice(
             }
         }
         Choices::STEELROLLER => {
-            if state.terrain.terrain_type == Terrain::NONE {
+            if state.get_terrain() == Terrain::NONE {
                 attacker_choice.base_power = 0.0;
             }
         }
@@ -375,7 +434,10 @@ pub fn modify_choice(
                     defending_side.calculate_boosted_stat(PokemonBoostableStat::Attack);
                 let attacker_maxhp = attacking_side.get_active_immutable().maxhp;
 
-                if defending_side.get_active_immutable().ability == Abilities::LIQUIDOOZE {
+                if state.active_ability_is_active(
+                    &attacking_side_ref.get_other_side(),
+                    Abilities::LIQUIDOOZE,
+                ) {
                     attacker_choice.heal = Some(Heal {
                         target: MoveTarget::User,
                         amount: -1.0 * defender_attack as f32 / attacker_maxhp as f32,
@@ -420,7 +482,7 @@ pub fn modify_choice(
                 attacker_choice.category = MoveCategory::Physical;
             }
         }
-        Choices::TERRAINPULSE => match state.terrain.terrain_type {
+        Choices::TERRAINPULSE => match state.get_terrain() {
             Terrain::ELECTRICTERRAIN => {
                 attacker_choice.move_type = PokemonType::ELECTRIC;
                 attacker_choice.base_power *= 2.0;
@@ -474,7 +536,7 @@ pub fn modify_choice(
             }
         }
         Choices::BLIZZARD => {
-            if state.weather_is_active(&Weather::HAIL) {
+            if state.weather_is_active(&Weather::HAIL) || state.weather_is_active(&Weather::SNOW) {
                 attacker_choice.accuracy = 100.0;
             }
         }
@@ -655,8 +717,10 @@ pub fn choice_after_damage_hit(
     instructions: &mut StateInstructions,
     hit_sub: bool,
 ) {
+    let active_ability = state.active_ability(attacking_side_ref);
+    let defending_side_ref = attacking_side_ref.get_other_side();
+    let defender_item_can_be_removed = state.active_item_can_be_removed(&defending_side_ref);
     let (attacking_side, defending_side) = state.get_both_sides(attacking_side_ref);
-    let attacker_active = attacking_side.get_active();
     if choice.flags.recharge {
         let instruction = Instruction::ApplyVolatileStatus(ApplyVolatileStatusInstruction {
             side_ref: attacking_side_ref.clone(),
@@ -668,7 +732,7 @@ pub fn choice_after_damage_hit(
             .insert(PokemonVolatileStatus::MUSTRECHARGE);
 
     // Recharging and truant are mutually exclusive, with recharge taking priority
-    } else if attacker_active.ability == Abilities::TRUANT {
+    } else if active_ability == Abilities::TRUANT {
         let instruction = Instruction::ApplyVolatileStatus(ApplyVolatileStatusInstruction {
             side_ref: attacking_side_ref.clone(),
             volatile_status: PokemonVolatileStatus::TRUANT,
@@ -795,10 +859,7 @@ pub fn choice_after_damage_hit(
         }
         Choices::KNOCKOFF => {
             let defender_active = defending_side.get_active();
-            if defender_active.item_can_be_removed()
-                && defender_active.item != Items::NONE
-                && !hit_sub
-            {
+            if defender_item_can_be_removed && defender_active.item != Items::NONE && !hit_sub {
                 let instruction = Instruction::ChangeItem(ChangeItemInstruction {
                     side_ref: attacking_side_ref.get_other_side(),
                     current_item: defender_active.item,
@@ -811,7 +872,7 @@ pub fn choice_after_damage_hit(
         Choices::THIEF => {
             let attacker_active = attacking_side.get_active();
             let defender_active = defending_side.get_active();
-            if defender_active.item_can_be_removed()
+            if defender_item_can_be_removed
                 && defender_active.item != Items::NONE
                 && attacker_active.item == Items::NONE
                 && !hit_sub
@@ -922,7 +983,11 @@ pub fn choice_before_move(
     attacking_side_ref: &SideReference,
     instructions: &mut StateInstructions,
 ) {
-    let (attacking_side, defending_side) = state.get_both_sides(attacking_side_ref);
+    let active_ability = state.active_ability(attacking_side_ref);
+    let active_item_is_active = state.active_item_is_active(attacking_side_ref);
+    let defending_side_ref = attacking_side_ref.get_other_side();
+    let defending_ability = state.active_ability(&defending_side_ref);
+    let (attacking_side, _defending_side) = state.get_both_sides(attacking_side_ref);
 
     destinybond_before_move(attacking_side, attacking_side_ref, choice, instructions);
 
@@ -939,7 +1004,6 @@ pub fn choice_before_move(
 
     let active_attacker_index = attacking_side.active_index;
     let attacker = attacking_side.get_active();
-    let defender = defending_side.get_active_immutable();
 
     match choice.move_id {
         Choices::FUTURESIGHT => {
@@ -956,7 +1020,7 @@ pub fn choice_before_move(
             }
         }
         Choices::EXPLOSION | Choices::SELFDESTRUCT | Choices::MISTYEXPLOSION
-            if defender.ability != Abilities::DAMP =>
+            if defending_ability != Abilities::DAMP =>
         {
             let damage_amount = attacker.hp;
             instructions
@@ -976,12 +1040,14 @@ pub fn choice_before_move(
             attacker.hp = 0;
         }
         Choices::METEORBEAM | Choices::ELECTROSHOT if choice.flags.charge => {
-            apply_boost_instruction(
+            apply_boost_instruction_with_effective(
                 attacking_side,
                 &PokemonBoostableStat::SpecialAttack,
                 &1,
                 attacking_side_ref,
                 attacking_side_ref,
+                active_ability,
+                active_item_is_active,
                 instructions,
             );
         }
@@ -991,6 +1057,7 @@ pub fn choice_before_move(
     let attacker = attacking_side.get_active();
     if choice.flags.charge
         && attacker.item == Items::POWERHERB
+        && active_item_is_active
         && choice.move_id != Choices::SKYDROP
     {
         let instruction = Instruction::ChangeItem(ChangeItemInstruction {
@@ -1022,7 +1089,15 @@ pub fn choice_hazard_clear(
     attacking_side_ref: &SideReference,
     instructions: &mut StateInstructions,
 ) {
-    let (attacking_side, defending_side) = state.get_both_sides(attacking_side_ref);
+    let defending_side_ref = attacking_side_ref.get_other_side();
+    let defending_ability = state.active_ability(&defending_side_ref);
+    let defog_ignores_good_as_gold = state.active_ignores_target_ability(
+        attacking_side_ref,
+        &choice.move_id,
+        Abilities::GOODASGOLD,
+        choice.category == MoveCategory::Status,
+    );
+    let (attacking_side, _defending_side) = state.get_both_sides(attacking_side_ref);
     match choice.move_id {
         Choices::COURTCHANGE => {
             let mut instruction_list = vec![];
@@ -1066,7 +1141,7 @@ pub fn choice_hazard_clear(
             }
         }
         Choices::DEFOG
-            if defending_side.get_active_immutable().ability != Abilities::GOODASGOLD =>
+            if defending_ability != Abilities::GOODASGOLD || defog_ignores_good_as_gold =>
         {
             if state.terrain.terrain_type != Terrain::NONE {
                 instructions
@@ -1240,12 +1315,101 @@ pub fn choice_hazard_clear(
     }
 }
 
+pub fn choice_on_hit(
+    state: &mut State,
+    choice: &Choice,
+    attacking_side_ref: &SideReference,
+    instructions: &mut StateInstructions,
+) {
+    match choice.move_id {
+        Choices::SOAK => {
+            let Some(typechange_effect) = &choice.volatile_status else {
+                return;
+            };
+            if typechange_effect.volatile_status != PokemonVolatileStatus::TYPECHANGE {
+                return;
+            }
+
+            let target_side_ref = match choice.target {
+                MoveTarget::Opponent => attacking_side_ref.get_other_side(),
+                MoveTarget::User => *attacking_side_ref,
+            };
+            let source_side_ref = match choice.target {
+                MoveTarget::Opponent => *attacking_side_ref,
+                MoveTarget::User => attacking_side_ref.get_other_side(),
+            };
+            let attacker_has_infiltrator =
+                state.active_ability_is_active(&source_side_ref, Abilities::INFILTRATOR);
+            let target_side = state.get_side(&target_side_ref);
+            let target_active = target_side.get_active_immutable();
+            let old_types = target_active.types;
+            let blocks_type_change =
+                target_active.terastallized || blocks_non_forced_type_change(target_active.id);
+            let blocked_by_substitute = target_side
+                .volatile_statuses
+                .contains(&PokemonVolatileStatus::SUBSTITUTE)
+                && !attacker_has_infiltrator;
+            let blocked_by_protect = choice.flags.protect
+                && !choice.bypasses_protect
+                && (target_side
+                    .volatile_statuses
+                    .contains(&PokemonVolatileStatus::PROTECT)
+                    || target_side
+                        .volatile_statuses
+                        .contains(&PokemonVolatileStatus::SPIKYSHIELD)
+                    || target_side
+                        .volatile_statuses
+                        .contains(&PokemonVolatileStatus::BANEFULBUNKER)
+                    || target_side
+                        .volatile_statuses
+                        .contains(&PokemonVolatileStatus::BURNINGBULWARK)
+                    || target_side
+                        .volatile_statuses
+                        .contains(&PokemonVolatileStatus::SILKTRAP));
+
+            if old_types != (PokemonType::WATER, PokemonType::TYPELESS)
+                && !blocks_type_change
+                && !blocked_by_substitute
+                && !blocked_by_protect
+            {
+                if !target_side
+                    .volatile_statuses
+                    .contains(&PokemonVolatileStatus::TYPECHANGE)
+                {
+                    instructions
+                        .instruction_list
+                        .push(Instruction::ApplyVolatileStatus(
+                            ApplyVolatileStatusInstruction {
+                                side_ref: target_side_ref,
+                                volatile_status: PokemonVolatileStatus::TYPECHANGE,
+                            },
+                        ));
+                    target_side
+                        .volatile_statuses
+                        .insert(PokemonVolatileStatus::TYPECHANGE);
+                }
+
+                let typechange_instruction = Instruction::ChangeType(ChangeType {
+                    side_ref: target_side_ref,
+                    new_types: (PokemonType::WATER, PokemonType::TYPELESS),
+                    old_types,
+                });
+                state.apply_one_instruction(&typechange_instruction);
+                instructions.instruction_list.push(typechange_instruction);
+            }
+        }
+        _ => {}
+    }
+}
+
 pub fn choice_special_effect(
     state: &mut State,
     choice: &mut Choice,
     attacking_side_ref: &SideReference,
     instructions: &mut StateInstructions,
 ) {
+    let defender_side_ref = attacking_side_ref.get_other_side();
+    let defender_item_can_be_removed = state.active_item_can_be_removed(&defender_side_ref);
     let (attacking_side, defending_side) = state.get_both_sides(attacking_side_ref);
     let attacker_index = attacking_side.active_index;
     match choice.move_id {
@@ -1657,10 +1821,11 @@ pub fn choice_special_effect(
         }
         Choices::PERISHSONG => {
             for side_ref in [SideReference::SideOne, SideReference::SideTwo] {
+                let soundproof_active = state.active_ability(&side_ref) == Abilities::SOUNDPROOF;
                 let side = state.get_side(&side_ref);
                 let pkmn = side.get_active();
                 if pkmn.hp != 0
-                    && pkmn.ability != Abilities::SOUNDPROOF
+                    && !soundproof_active
                     && !(side
                         .volatile_statuses
                         .contains(&PokemonVolatileStatus::PERISH4)
@@ -1695,8 +1860,7 @@ pub fn choice_special_effect(
             let defender = defending_side.get_active();
             let attacker_item = attacker.item;
             let defender_item = defender.item;
-            if attacker_item == defender_item || !defender.item_can_be_removed() || defender_has_sub
-            {
+            if attacker_item == defender_item || !defender_item_can_be_removed || defender_has_sub {
                 return;
             }
             let change_attacker_item_instruction = Instruction::ChangeItem(ChangeItemInstruction {
@@ -1719,74 +1883,19 @@ pub fn choice_special_effect(
                 .push(change_defender_item_instruction);
         }
         Choices::SUNNYDAY => {
-            if state.weather.weather_type != Weather::SUN {
-                instructions
-                    .instruction_list
-                    .push(Instruction::ChangeWeather(ChangeWeather {
-                        new_weather: Weather::SUN,
-                        new_weather_turns_remaining: 5,
-                        previous_weather: state.weather.weather_type,
-                        previous_weather_turns_remaining: state.weather.turns_remaining,
-                    }));
-                state.weather.weather_type = Weather::SUN;
-                state.weather.turns_remaining = 5;
-            }
+            set_regular_weather(state, instructions, Weather::SUN, 5);
         }
         Choices::RAINDANCE => {
-            if state.weather.weather_type != Weather::RAIN {
-                instructions
-                    .instruction_list
-                    .push(Instruction::ChangeWeather(ChangeWeather {
-                        new_weather: Weather::RAIN,
-                        new_weather_turns_remaining: 5,
-                        previous_weather: state.weather.weather_type,
-                        previous_weather_turns_remaining: state.weather.turns_remaining,
-                    }));
-                state.weather.weather_type = Weather::RAIN;
-                state.weather.turns_remaining = 5;
-            }
+            set_regular_weather(state, instructions, Weather::RAIN, 5);
         }
         Choices::SANDSTORM => {
-            if state.weather.weather_type != Weather::SAND {
-                instructions
-                    .instruction_list
-                    .push(Instruction::ChangeWeather(ChangeWeather {
-                        new_weather: Weather::SAND,
-                        new_weather_turns_remaining: 5,
-                        previous_weather: state.weather.weather_type,
-                        previous_weather_turns_remaining: state.weather.turns_remaining,
-                    }));
-                state.weather.weather_type = Weather::SAND;
-                state.weather.turns_remaining = 5;
-            }
+            set_regular_weather(state, instructions, Weather::SAND, 5);
         }
         Choices::HAIL => {
-            if state.weather.weather_type != Weather::HAIL {
-                instructions
-                    .instruction_list
-                    .push(Instruction::ChangeWeather(ChangeWeather {
-                        new_weather: Weather::HAIL,
-                        new_weather_turns_remaining: 5,
-                        previous_weather: state.weather.weather_type,
-                        previous_weather_turns_remaining: state.weather.turns_remaining,
-                    }));
-                state.weather.weather_type = Weather::HAIL;
-                state.weather.turns_remaining = 5;
-            }
+            set_regular_weather(state, instructions, Weather::HAIL, 5);
         }
         Choices::SNOWSCAPE | Choices::CHILLYRECEPTION => {
-            if state.weather.weather_type != Weather::SNOW {
-                instructions
-                    .instruction_list
-                    .push(Instruction::ChangeWeather(ChangeWeather {
-                        new_weather: Weather::SNOW,
-                        new_weather_turns_remaining: 5,
-                        previous_weather: state.weather.weather_type,
-                        previous_weather_turns_remaining: state.weather.turns_remaining,
-                    }));
-                state.weather.weather_type = Weather::SNOW;
-                state.weather.turns_remaining = 5;
-            }
+            set_regular_weather(state, instructions, Weather::SNOW, 5);
         }
         _ => {}
     }

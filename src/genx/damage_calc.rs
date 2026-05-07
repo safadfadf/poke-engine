@@ -1,4 +1,5 @@
 use super::abilities::Abilities;
+use super::items::Items;
 use super::state::{PokemonVolatileStatus, Terrain, Weather};
 use crate::choices::{Choice, MoveCategory};
 use crate::choices::{Choices, MOVES};
@@ -64,6 +65,7 @@ pub const CRIT_MULTIPLIER: f32 = 2.0;
 pub const CRIT_MULTIPLIER: f32 = 1.5;
 
 #[allow(dead_code)]
+#[derive(Clone, Copy)]
 pub enum DamageRolls {
     Average,
     Min,
@@ -148,16 +150,46 @@ fn weather_modifier(attacking_move_type: &PokemonType, weather: &Weather) -> f32
     }
 }
 
-fn damage_weather_for_attacker(state: &State, attacker: &Pokemon, defender: &Pokemon) -> Weather {
-    if attacker.ability == Abilities::MEGASOL
-        && defender.ability != Abilities::NEUTRALIZINGGAS
-        && defender.ability != Abilities::CLOUDNINE
-        && defender.ability != Abilities::AIRLOCK
+fn damage_weather_for_attacker(state: &State, attacking_side_ref: &SideReference) -> Weather {
+    let defending_ability = state.active_ability(&attacking_side_ref.get_other_side());
+    if state.active_ability_is_active(attacking_side_ref, Abilities::MEGASOL)
+        && defending_ability != Abilities::CLOUDNINE
+        && defending_ability != Abilities::AIRLOCK
     {
-        Weather::SUN
-    } else {
-        state.weather.weather_type
+        return Weather::SUN;
     }
+
+    for weather in [
+        Weather::HARSHSUN,
+        Weather::HEAVYRAIN,
+        Weather::SUN,
+        Weather::RAIN,
+        Weather::SAND,
+        Weather::SNOW,
+        Weather::HAIL,
+    ] {
+        if state.weather_is_active(&weather) {
+            return weather;
+        }
+    }
+    Weather::NONE
+}
+
+fn attacker_ignores_target_ability(
+    attacking_ability: Abilities,
+    choice: &Choice,
+    defender_has_effective_ability_shield: bool,
+) -> bool {
+    if defender_has_effective_ability_shield {
+        return false;
+    }
+    matches!(
+        attacking_ability,
+        Abilities::MOLDBREAKER | Abilities::TERAVOLT | Abilities::TURBOBLAZE
+    ) || matches!(
+        choice.move_id,
+        Choices::MOONGEISTBEAM | Choices::PHOTONGEYSER | Choices::SUNSTEELSTRIKE
+    )
 }
 
 fn stab_modifier(attacking_move_type: &PokemonType, active_pkmn: &Pokemon) -> f32 {
@@ -195,8 +227,8 @@ fn burn_modifier(
 
 fn terrain_modifier(
     terrain: &Terrain,
-    attacker: &Pokemon,
-    defender: &Pokemon,
+    attacker_is_grounded: bool,
+    defender_is_grounded: bool,
     choice: &Choice,
 ) -> f32 {
     #[cfg(any(feature = "gen9", feature = "gen8"))]
@@ -207,14 +239,14 @@ fn terrain_modifier(
 
     match terrain {
         Terrain::ELECTRICTERRAIN => {
-            if choice.move_type == PokemonType::ELECTRIC && attacker.is_grounded() {
+            if choice.move_type == PokemonType::ELECTRIC && attacker_is_grounded {
                 terrain_boost
             } else {
                 1.0
             }
         }
         Terrain::GRASSYTERRAIN => {
-            if choice.move_type == PokemonType::GRASS && attacker.is_grounded() {
+            if choice.move_type == PokemonType::GRASS && attacker_is_grounded {
                 terrain_boost
             } else if choice.move_id == Choices::EARTHQUAKE {
                 0.5
@@ -223,14 +255,14 @@ fn terrain_modifier(
             }
         }
         Terrain::MISTYTERRAIN => {
-            if choice.move_type == PokemonType::DRAGON && defender.is_grounded() {
+            if choice.move_type == PokemonType::DRAGON && defender_is_grounded {
                 0.5
             } else {
                 1.0
             }
         }
         Terrain::PSYCHICTERRAIN => {
-            if choice.move_type == PokemonType::PSYCHIC && attacker.is_grounded() {
+            if choice.move_type == PokemonType::PSYCHIC && attacker_is_grounded {
                 terrain_boost
             } else {
                 1.0
@@ -240,26 +272,52 @@ fn terrain_modifier(
     }
 }
 
-fn volatile_status_modifier(choice: &Choice, attacking_side: &Side, defending_side: &Side) -> f32 {
+fn volatile_status_modifier(
+    choice: &Choice,
+    attacking_side: &Side,
+    defending_side: &Side,
+    attacking_ability: Abilities,
+    defending_ability: Abilities,
+) -> f32 {
     let mut modifier = 1.0;
     for vs in attacking_side.volatile_statuses.iter() {
         match vs {
-            PokemonVolatileStatus::FLASHFIRE if choice.move_type == PokemonType::FIRE => {
+            PokemonVolatileStatus::FLASHFIRE
+                if attacking_ability == Abilities::FLASHFIRE
+                    && choice.move_type == PokemonType::FIRE =>
+            {
                 modifier *= 1.5;
             }
-            PokemonVolatileStatus::SLOWSTART if choice.category == MoveCategory::Physical => {
+            PokemonVolatileStatus::SLOWSTART
+                if attacking_ability == Abilities::SLOWSTART
+                    && choice.category == MoveCategory::Physical =>
+            {
                 modifier *= 0.5;
             }
             PokemonVolatileStatus::CHARGE if choice.move_type == PokemonType::ELECTRIC => {
                 modifier *= 2.0;
             }
-            PokemonVolatileStatus::PROTOSYNTHESISATK | PokemonVolatileStatus::QUARKDRIVEATK
-                if choice.category == MoveCategory::Physical =>
+            PokemonVolatileStatus::PROTOSYNTHESISATK
+                if attacking_ability == Abilities::PROTOSYNTHESIS
+                    && choice.category == MoveCategory::Physical =>
             {
                 modifier *= 1.3;
             }
-            PokemonVolatileStatus::PROTOSYNTHESISSPA | PokemonVolatileStatus::QUARKDRIVESPA
-                if choice.category == MoveCategory::Special =>
+            PokemonVolatileStatus::QUARKDRIVEATK
+                if attacking_ability == Abilities::QUARKDRIVE
+                    && choice.category == MoveCategory::Physical =>
+            {
+                modifier *= 1.3;
+            }
+            PokemonVolatileStatus::PROTOSYNTHESISSPA
+                if attacking_ability == Abilities::PROTOSYNTHESIS
+                    && choice.category == MoveCategory::Special =>
+            {
+                modifier *= 1.3;
+            }
+            PokemonVolatileStatus::QUARKDRIVESPA
+                if attacking_ability == Abilities::QUARKDRIVE
+                    && choice.category == MoveCategory::Special =>
             {
                 modifier *= 1.3;
             }
@@ -289,13 +347,27 @@ fn volatile_status_modifier(choice: &Choice, attacking_side: &Side, defending_si
             PokemonVolatileStatus::GLAIVERUSH => {
                 modifier *= 2.0;
             }
-            PokemonVolatileStatus::PROTOSYNTHESISDEF | PokemonVolatileStatus::QUARKDRIVEDEF
-                if choice.category == MoveCategory::Physical =>
+            PokemonVolatileStatus::PROTOSYNTHESISDEF
+                if defending_ability == Abilities::PROTOSYNTHESIS
+                    && choice.category == MoveCategory::Physical =>
             {
                 modifier /= 1.3;
             }
-            PokemonVolatileStatus::PROTOSYNTHESISSPD | PokemonVolatileStatus::QUARKDRIVESPD
-                if choice.category == MoveCategory::Special =>
+            PokemonVolatileStatus::QUARKDRIVEDEF
+                if defending_ability == Abilities::QUARKDRIVE
+                    && choice.category == MoveCategory::Physical =>
+            {
+                modifier /= 1.3;
+            }
+            PokemonVolatileStatus::PROTOSYNTHESISSPD
+                if defending_ability == Abilities::PROTOSYNTHESIS
+                    && choice.category == MoveCategory::Special =>
+            {
+                modifier /= 1.3;
+            }
+            PokemonVolatileStatus::QUARKDRIVESPD
+                if defending_ability == Abilities::QUARKDRIVE
+                    && choice.category == MoveCategory::Special =>
             {
                 modifier /= 1.3;
             }
@@ -309,7 +381,7 @@ fn volatile_status_modifier(choice: &Choice, attacking_side: &Side, defending_si
 fn get_defending_types(
     side: &Side,
     defending_pkmn: &Pokemon,
-    attacking_pkmn: &Pokemon,
+    attacking_ability: Abilities,
     attacking_choice: &Choice,
 ) -> (PokemonType, PokemonType) {
     if defending_pkmn.terastallized && !(defending_pkmn.tera_type == PokemonType::STELLAR) {
@@ -327,8 +399,7 @@ fn get_defending_types(
             defender_types = (defender_types.0, PokemonType::TYPELESS);
         }
     }
-    if (attacking_pkmn.ability == Abilities::SCRAPPY
-        || attacking_pkmn.ability == Abilities::MINDSEYE)
+    if (attacking_ability == Abilities::SCRAPPY || attacking_ability == Abilities::MINDSEYE)
         && (attacking_choice.move_type == PokemonType::NORMAL
             || attacking_choice.move_type == PokemonType::FIGHTING)
     {
@@ -348,6 +419,9 @@ fn get_attacking_and_defending_stats(
     attacking_side: &Side,
     defending_side: &Side,
     state: &State,
+    attacking_ability: Abilities,
+    defending_ability: Abilities,
+    defender_has_effective_ability_shield: bool,
     choice: &Choice,
 ) -> (i16, i16, i16, i16) {
     let mut should_calc_attacker_boost = true;
@@ -376,12 +450,16 @@ fn get_attacking_and_defending_stats(
             }
 
             // Unaware checks
-            if defender.ability == Abilities::UNAWARE && attacker.ability != Abilities::MOLDBREAKER
+            if defending_ability == Abilities::UNAWARE
+                && !attacker_ignores_target_ability(
+                    attacking_ability,
+                    choice,
+                    defender_has_effective_ability_shield,
+                )
             {
                 should_calc_attacker_boost = false;
             }
-            if attacker.ability == Abilities::UNAWARE && defender.ability != Abilities::MOLDBREAKER
-            {
+            if attacking_ability == Abilities::UNAWARE {
                 should_calc_defender_boost = false;
             }
 
@@ -435,12 +513,16 @@ fn get_attacking_and_defending_stats(
             }
 
             // Unaware checks
-            if defender.ability == Abilities::UNAWARE && attacker.ability != Abilities::MOLDBREAKER
+            if defending_ability == Abilities::UNAWARE
+                && !attacker_ignores_target_ability(
+                    attacking_ability,
+                    choice,
+                    defender_has_effective_ability_shield,
+                )
             {
                 should_calc_attacker_boost = false;
             }
-            if attacker.ability == Abilities::UNAWARE && defender.ability != Abilities::MOLDBREAKER
-            {
+            if attacking_ability == Abilities::UNAWARE {
                 should_calc_defender_boost = false;
             }
 
@@ -513,15 +595,25 @@ fn get_attacking_and_defending_stats(
     )
 }
 
-fn common_pkmn_damage_calc(
-    attacking_side: &Side,
-    attacker: &Pokemon,
-    attacking_stat: i16,
+fn type_effectiveness_modifier_for_damage(
     defending_side: &Side,
     defender: &Pokemon,
+    attacking_ability: Abilities,
+    choice: &Choice,
+) -> f32 {
+    let defender_types = get_defending_types(defending_side, defender, attacking_ability, choice);
+
+    if defender.terastallized && choice.move_type == PokemonType::STELLAR {
+        2.0
+    } else {
+        _type_effectiveness_modifier(&choice.move_type, &defender_types)
+    }
+}
+
+fn common_pkmn_base_damage(
+    attacker: &Pokemon,
+    attacking_stat: i16,
     defending_stat: i16,
-    weather: &Weather,
-    terrain: &Terrain,
     choice: &Choice,
 ) -> f32 {
     let mut damage: f32;
@@ -531,43 +623,133 @@ fn common_pkmn_damage_calc(
     damage = damage.floor() * choice.base_power;
     damage = damage * attacking_stat as f32 / defending_stat as f32;
     damage = damage.floor() / 50.0;
-    damage = damage.floor() + 2.0;
-
-    let defender_types = get_defending_types(&defending_side, defender, attacker, choice);
-
-    let mut damage_modifier = 1.0;
-
-    if defender.terastallized && choice.move_type == PokemonType::STELLAR {
-        damage_modifier *= 2.0;
-    } else {
-        damage_modifier *= _type_effectiveness_modifier(&choice.move_type, &defender_types);
-    }
-
-    if (attacker.ability == Abilities::MEGASOL
-        || (attacker.ability != Abilities::CLOUDNINE && attacker.ability != Abilities::AIRLOCK))
-        && defender.ability != Abilities::CLOUDNINE
-        && defender.ability != Abilities::AIRLOCK
-    {
-        damage_modifier *= weather_modifier(&choice.move_type, weather);
-    }
-
-    damage_modifier *= stab_modifier(&choice.move_type, &attacker);
-    damage_modifier *= burn_modifier(&choice.category, &attacker.status);
-    damage_modifier *= volatile_status_modifier(&choice, attacking_side, defending_side);
-    damage_modifier *= terrain_modifier(terrain, attacker, defender, &choice);
-    damage_modifier *= choice.protected_damage_multiplier;
-
-    damage * damage_modifier
+    damage.floor()
 }
 
-fn apply_final_damage_modifier(damage: f32, modifier: f32) -> f32 {
+fn apply_damage_modifier(damage: f32, modifier: f32) -> f32 {
     if modifier == 1.0 {
         return damage;
+    }
+    if modifier == 0.0 {
+        return 0.0;
     }
 
     let damage = damage.floor();
     let modifier = (modifier * 4096.0).floor();
     ((damage * modifier).floor() + 2048.0 - 1.0) / 4096.0
+}
+
+fn apply_type_damage_modifier(mut damage: f32, mut modifier: f32) -> f32 {
+    if modifier == 0.0 {
+        return 0.0;
+    }
+
+    while modifier > 1.0 {
+        damage *= 2.0;
+        modifier /= 2.0;
+    }
+    while modifier < 1.0 {
+        damage = (damage / 2.0).floor();
+        modifier *= 2.0;
+    }
+    damage
+}
+
+fn apply_damage_roll(damage: f32, damage_rolls: DamageRolls) -> f32 {
+    match damage_rolls {
+        DamageRolls::Average => (damage.floor() * 0.925).floor(),
+        DamageRolls::Min => (damage.floor() * 0.85).floor(),
+        DamageRolls::Max => damage.floor(),
+    }
+}
+
+fn screen_damage_modifier(
+    defending_side: &Side,
+    attacking_ability: Abilities,
+    choice: &Choice,
+) -> f32 {
+    if attacking_ability == Abilities::INFILTRATOR {
+        return 1.0;
+    }
+
+    if defending_side.side_conditions.aurora_veil > 0 {
+        0.5
+    } else if defending_side.side_conditions.reflect > 0
+        && choice.category == MoveCategory::Physical
+    {
+        0.5
+    } else if defending_side.side_conditions.light_screen > 0
+        && choice.category == MoveCategory::Special
+    {
+        0.5
+    } else {
+        1.0
+    }
+}
+
+fn apply_showdown_damage_order(
+    mut damage: f32,
+    attacking_side: &Side,
+    attacker: &Pokemon,
+    defending_side: &Side,
+    defender: &Pokemon,
+    attacker_weather: &Weather,
+    active_terrain: &Terrain,
+    attacker_is_grounded: bool,
+    defender_is_grounded: bool,
+    attacking_ability: Abilities,
+    defending_ability: Abilities,
+    choice: &Choice,
+    damage_rolls: DamageRolls,
+    crit: bool,
+) -> f32 {
+    damage = damage.floor() + 2.0;
+    damage = apply_damage_modifier(damage, choice.protected_damage_multiplier);
+    damage = apply_damage_modifier(
+        damage,
+        terrain_modifier(
+            active_terrain,
+            attacker_is_grounded,
+            defender_is_grounded,
+            choice,
+        ),
+    );
+    damage = apply_damage_modifier(
+        damage,
+        volatile_status_modifier(
+            choice,
+            attacking_side,
+            defending_side,
+            attacking_ability,
+            defending_ability,
+        ),
+    );
+    damage = apply_damage_modifier(
+        damage,
+        weather_modifier(&choice.move_type, attacker_weather),
+    );
+
+    if crit {
+        damage = (damage.floor() * CRIT_MULTIPLIER).floor();
+        if attacking_ability == Abilities::SNIPER {
+            damage = apply_damage_modifier(damage, 1.5);
+        }
+    }
+
+    damage = apply_damage_roll(damage, damage_rolls);
+    damage = apply_damage_modifier(damage, stab_modifier(&choice.move_type, attacker));
+    damage = apply_type_damage_modifier(
+        damage,
+        type_effectiveness_modifier_for_damage(defending_side, defender, attacking_ability, choice),
+    );
+    damage = apply_damage_modifier(damage, burn_modifier(&choice.category, &attacker.status));
+    damage = apply_damage_modifier(
+        damage,
+        screen_damage_modifier(defending_side, attacking_ability, choice),
+    );
+    damage = apply_damage_modifier(damage, choice.final_damage_modifier);
+
+    damage.floor()
 }
 
 // This is a basic damage calculation function that assumes special effects/modifiers
@@ -586,9 +768,17 @@ pub fn calculate_damage(
     } else if choice.base_power == 0.0 {
         return Some((0, 0));
     }
-    let (attacking_side, defending_side) = state.get_both_sides_immutable(attacking_side);
+    let attacking_side_ref = *attacking_side;
+    let defending_side_ref = attacking_side_ref.get_other_side();
+    let attacker_is_grounded = state.active_is_grounded(&attacking_side_ref);
+    let defender_is_grounded = state.active_is_grounded(&defending_side_ref);
+    let (attacking_side, defending_side) = state.get_both_sides_immutable(&attacking_side_ref);
     let attacker = attacking_side.get_active_immutable();
     let defender = defending_side.get_active_immutable();
+    let attacking_ability = state.active_ability(&attacking_side_ref);
+    let defending_ability = state.active_ability(&defending_side_ref);
+    let defender_has_effective_ability_shield =
+        state.active_has_effective_item(&defending_side_ref, Items::ABILITYSHIELD);
     let (attacking_stat, defending_stat, crit_attacking_stat, crit_defending_stat) =
         get_attacking_and_defending_stats(
             attacker,
@@ -596,94 +786,97 @@ pub fn calculate_damage(
             attacking_side,
             defending_side,
             state,
+            attacking_ability,
+            defending_ability,
+            defender_has_effective_ability_shield,
             &choice,
         );
+    let attacker_weather = damage_weather_for_attacker(state, &attacking_side_ref);
+    let active_terrain = state.get_terrain();
 
-    let mut damage = common_pkmn_damage_calc(
+    let damage = common_pkmn_base_damage(attacker, attacking_stat, defending_stat, choice);
+
+    let crit_damage =
+        common_pkmn_base_damage(attacker, crit_attacking_stat, crit_defending_stat, choice);
+
+    let damage = apply_showdown_damage_order(
+        damage,
         attacking_side,
         attacker,
-        attacking_stat,
         defending_side,
         defender,
-        defending_stat,
-        &damage_weather_for_attacker(state, attacker, defender),
-        &state.terrain.terrain_type,
+        &attacker_weather,
+        &active_terrain,
+        attacker_is_grounded,
+        defender_is_grounded,
+        attacking_ability,
+        defending_ability,
         choice,
+        _damage_rolls,
+        false,
     );
-    if attacker.ability != Abilities::INFILTRATOR {
-        if defending_side.side_conditions.aurora_veil > 0 {
-            damage *= 0.5
-        } else if defending_side.side_conditions.reflect > 0
-            && choice.category == MoveCategory::Physical
-        {
-            damage *= 0.5
-        } else if defending_side.side_conditions.light_screen > 0
-            && choice.category == MoveCategory::Special
-        {
-            damage *= 0.5
-        }
-    }
-
-    let mut crit_damage = common_pkmn_damage_calc(
+    let crit_damage = apply_showdown_damage_order(
+        crit_damage,
         attacking_side,
         attacker,
-        crit_attacking_stat,
         defending_side,
         defender,
-        crit_defending_stat,
-        &damage_weather_for_attacker(state, attacker, defender),
-        &state.terrain.terrain_type,
+        &attacker_weather,
+        &active_terrain,
+        attacker_is_grounded,
+        defender_is_grounded,
+        attacking_ability,
+        defending_ability,
         choice,
+        _damage_rolls,
+        true,
     );
-    crit_damage *= CRIT_MULTIPLIER;
-
-    match _damage_rolls {
-        DamageRolls::Average => {
-            damage = damage.floor() * 0.925;
-            crit_damage = crit_damage.floor() * 0.925;
-        }
-        DamageRolls::Min => {
-            damage = damage.floor() * 0.85;
-            crit_damage = crit_damage.floor() * 0.85;
-        }
-        DamageRolls::Max => {
-            damage = damage.floor();
-            crit_damage = crit_damage.floor();
-        }
-    }
-
-    damage = apply_final_damage_modifier(damage, choice.final_damage_modifier).floor();
-    crit_damage = apply_final_damage_modifier(crit_damage, choice.final_damage_modifier).floor();
 
     Some((damage as i16, crit_damage as i16))
 }
 
 pub fn calculate_futuresight_damage(
-    attacking_side: &Side,
-    defending_side: &Side,
+    state: &State,
+    attacking_side_ref: &SideReference,
     attacking_side_pokemon_index: &PokemonIndex,
 ) -> i16 {
-    let attacking_stat = attacking_side.pokemon[attacking_side_pokemon_index].special_attack;
+    let defending_side_ref = attacking_side_ref.get_other_side();
+    let (attacking_side, defending_side) = state.get_both_sides_immutable(attacking_side_ref);
+    let attacker = &attacking_side.pokemon[attacking_side_pokemon_index];
+    let attacking_stat = attacker.special_attack;
     let defending_stat = defending_side.get_active_immutable().special_defense;
-    let attacker = attacking_side.get_active_immutable();
-    let mut damage = common_pkmn_damage_calc(
-        attacking_side,
+    let attacking_ability = if attacking_side.active_index == *attacking_side_pokemon_index {
+        state.active_ability(attacking_side_ref)
+    } else {
+        Abilities::NONE
+    };
+    let defending_ability = state.active_ability(&defending_side_ref);
+    let attacker_weather = Weather::NONE;
+    let active_terrain = Terrain::NONE;
+    let mut damage = common_pkmn_base_damage(
         attacker,
         attacking_stat,
-        defending_side,
-        defending_side.get_active_immutable(),
         defending_stat,
-        &Weather::NONE,
-        &Terrain::NONE,
         MOVES.get(&Choices::FUTURESIGHT).unwrap(),
     );
-    if attacker.ability != Abilities::INFILTRATOR {
-        if defending_side.side_conditions.light_screen > 0 {
-            damage *= 0.5
-        }
-    }
+    damage = apply_showdown_damage_order(
+        damage,
+        attacking_side,
+        attacker,
+        defending_side,
+        defending_side.get_active_immutable(),
+        &attacker_weather,
+        &active_terrain,
+        false,
+        false,
+        attacking_ability,
+        defending_ability,
+        MOVES.get(&Choices::FUTURESIGHT).unwrap(),
+        DamageRolls::Average,
+        false,
+    );
 
-    (damage * 0.925) as i16
+    damage as i16
 }
 
 #[cfg(test)]
@@ -828,6 +1021,267 @@ mod tests {
     }
 
     #[test]
+    fn test_abilityshield_blocks_moldbreaker_bypassing_unaware() {
+        let mut state = State::default();
+        let mut choice = Choice {
+            ..Default::default()
+        };
+        state.side_one.attack_boost = 1;
+        state.side_one.get_active().ability = Abilities::MOLDBREAKER;
+        state.side_two.get_active().ability = Abilities::UNAWARE;
+        state.side_two.get_active().item = Items::ABILITYSHIELD;
+        choice.move_id = Choices::TACKLE;
+        choice.move_type = PokemonType::TYPELESS;
+        choice.base_power = 40.0;
+        choice.category = MoveCategory::Physical;
+
+        let dmg = calculate_damage(
+            &state,
+            &SideReference::SideOne,
+            &choice,
+            DamageRolls::Average,
+        );
+
+        assert_eq!(32, dmg.unwrap().0);
+    }
+
+    #[test]
+    fn test_embargo_disables_abilityshield_blocking_moldbreaker_unaware() {
+        let mut state = State::default();
+        let mut choice = Choice {
+            ..Default::default()
+        };
+        state.side_one.attack_boost = 1;
+        state.side_one.get_active().ability = Abilities::MOLDBREAKER;
+        state.side_two.get_active().ability = Abilities::UNAWARE;
+        state.side_two.get_active().item = Items::ABILITYSHIELD;
+        state
+            .side_two
+            .volatile_statuses
+            .insert(PokemonVolatileStatus::EMBARGO);
+        choice.move_id = Choices::TACKLE;
+        choice.move_type = PokemonType::TYPELESS;
+        choice.base_power = 40.0;
+        choice.category = MoveCategory::Physical;
+
+        let dmg = calculate_damage(
+            &state,
+            &SideReference::SideOne,
+            &choice,
+            DamageRolls::Average,
+        );
+
+        assert_eq!(48, dmg.unwrap().0);
+    }
+
+    #[test]
+    fn test_unaware_does_get_damaged_by_boosted_stats_if_attacker_has_teravolt() {
+        let mut state = State::default();
+        let mut choice = Choice {
+            ..Default::default()
+        };
+        state.side_one.attack_boost = 1;
+        state.side_two.get_active().ability = Abilities::UNAWARE;
+        state.side_one.get_active().ability = Abilities::TERAVOLT;
+        choice.move_id = Choices::TACKLE;
+        choice.move_type = PokemonType::TYPELESS;
+        choice.base_power = 40.0;
+        choice.category = MoveCategory::Physical;
+
+        let dmg = calculate_damage(
+            &state,
+            &SideReference::SideOne,
+            &choice,
+            DamageRolls::Average,
+        );
+
+        assert_eq!(48, dmg.unwrap().0);
+    }
+
+    #[test]
+    fn test_unaware_does_get_damaged_by_boosted_stats_if_move_ignores_ability() {
+        let mut state = State::default();
+        let mut choice = Choice {
+            ..Default::default()
+        };
+        state.side_one.special_attack_boost = 1;
+        state.side_two.get_active().ability = Abilities::UNAWARE;
+        choice.move_id = Choices::MOONGEISTBEAM;
+        choice.move_type = PokemonType::TYPELESS;
+        choice.base_power = 40.0;
+        choice.category = MoveCategory::Special;
+
+        let dmg = calculate_damage(
+            &state,
+            &SideReference::SideOne,
+            &choice,
+            DamageRolls::Average,
+        );
+
+        assert_eq!(48, dmg.unwrap().0);
+    }
+
+    #[test]
+    fn test_defender_moldbreaker_does_not_bypass_attacker_unaware() {
+        let mut state = State::default();
+        let mut choice = Choice {
+            ..Default::default()
+        };
+        state.side_one.get_active().ability = Abilities::UNAWARE;
+        state.side_two.get_active().ability = Abilities::MOLDBREAKER;
+        state.side_two.defense_boost = 1;
+        choice.move_id = Choices::TACKLE;
+        choice.move_type = PokemonType::TYPELESS;
+        choice.base_power = 40.0;
+        choice.category = MoveCategory::Physical;
+
+        let dmg = calculate_damage(
+            &state,
+            &SideReference::SideOne,
+            &choice,
+            DamageRolls::Average,
+        );
+
+        assert_eq!(32, dmg.unwrap().0);
+    }
+
+    #[test]
+    fn test_gastroacid_suppresses_scrappy_ghost_immunity_bypass() {
+        let mut state = State::default();
+        let mut choice = Choice {
+            ..Default::default()
+        };
+        state.side_one.get_active().ability = Abilities::SCRAPPY;
+        state
+            .side_one
+            .volatile_statuses
+            .insert(PokemonVolatileStatus::GASTROACID);
+        state.side_two.get_active().types = (PokemonType::GHOST, PokemonType::TYPELESS);
+        choice.move_id = Choices::TACKLE;
+        choice.move_type = PokemonType::NORMAL;
+        choice.base_power = 40.0;
+        choice.category = MoveCategory::Physical;
+
+        let dmg = calculate_damage(
+            &state,
+            &SideReference::SideOne,
+            &choice,
+            DamageRolls::Average,
+        );
+
+        assert_eq!(0, dmg.unwrap().0);
+    }
+
+    #[test]
+    fn test_gastroacid_suppresses_defender_unaware() {
+        let mut state = State::default();
+        let mut choice = Choice {
+            ..Default::default()
+        };
+        state.side_one.attack_boost = 1;
+        state.side_two.get_active().ability = Abilities::UNAWARE;
+        state
+            .side_two
+            .volatile_statuses
+            .insert(PokemonVolatileStatus::GASTROACID);
+        choice.move_id = Choices::TACKLE;
+        choice.move_type = PokemonType::TYPELESS;
+        choice.base_power = 40.0;
+        choice.category = MoveCategory::Physical;
+
+        let dmg = calculate_damage(
+            &state,
+            &SideReference::SideOne,
+            &choice,
+            DamageRolls::Average,
+        );
+
+        assert_eq!(48, dmg.unwrap().0);
+    }
+
+    #[test]
+    fn test_gastroacid_suppresses_attacker_moldbreaker_against_unaware() {
+        let mut state = State::default();
+        let mut choice = Choice {
+            ..Default::default()
+        };
+        state.side_one.attack_boost = 1;
+        state.side_one.get_active().ability = Abilities::MOLDBREAKER;
+        state
+            .side_one
+            .volatile_statuses
+            .insert(PokemonVolatileStatus::GASTROACID);
+        state.side_two.get_active().ability = Abilities::UNAWARE;
+        choice.move_id = Choices::TACKLE;
+        choice.move_type = PokemonType::TYPELESS;
+        choice.base_power = 40.0;
+        choice.category = MoveCategory::Physical;
+
+        let dmg = calculate_damage(
+            &state,
+            &SideReference::SideOne,
+            &choice,
+            DamageRolls::Average,
+        );
+
+        assert_eq!(32, dmg.unwrap().0);
+    }
+
+    #[test]
+    fn test_neutralizinggas_suppresses_infiltrator_screens_bypass() {
+        let mut state = State::default();
+        let mut choice = Choice {
+            ..Default::default()
+        };
+        state.side_one.get_active().ability = Abilities::INFILTRATOR;
+        state.side_two.get_active().ability = Abilities::NEUTRALIZINGGAS;
+        state.side_two.side_conditions.light_screen = 1;
+        choice.move_id = Choices::WATERGUN;
+        choice.move_type = PokemonType::TYPELESS;
+        choice.base_power = 40.0;
+        choice.category = MoveCategory::Special;
+
+        let dmg = calculate_damage(
+            &state,
+            &SideReference::SideOne,
+            &choice,
+            DamageRolls::Average,
+        );
+
+        assert_eq!(15, dmg.unwrap().0);
+    }
+
+    #[test]
+    fn test_gastroacid_suppresses_protosynthesis_attack_modifier() {
+        let mut state = State::default();
+        let mut choice = Choice {
+            ..Default::default()
+        };
+        state.side_one.get_active().ability = Abilities::PROTOSYNTHESIS;
+        state
+            .side_one
+            .volatile_statuses
+            .insert(PokemonVolatileStatus::GASTROACID);
+        state
+            .side_one
+            .volatile_statuses
+            .insert(PokemonVolatileStatus::PROTOSYNTHESISATK);
+        choice.move_id = Choices::TACKLE;
+        choice.move_type = PokemonType::TYPELESS;
+        choice.base_power = 40.0;
+        choice.category = MoveCategory::Physical;
+
+        let dmg = calculate_damage(
+            &state,
+            &SideReference::SideOne,
+            &choice,
+            DamageRolls::Average,
+        );
+
+        assert_eq!(32, dmg.unwrap().0);
+    }
+
+    #[test]
     fn test_basic_super_effective_move() {
         let mut state = State::default();
         let mut choice = Choice {
@@ -882,6 +1336,15 @@ mod tests {
                         ..Default::default()
                     };
                     state.weather.weather_type = weather_type;
+                    match weather_type {
+                        Weather::HARSHSUN => {
+                            state.side_one.get_active().ability = Abilities::DESOLATELAND;
+                        }
+                        Weather::HEAVYRAIN => {
+                            state.side_one.get_active().ability = Abilities::PRIMORDIALSEA;
+                        }
+                        _ => {}
+                    }
 
                     choice.move_type = move_type;
                     choice.base_power = 40.0;
@@ -1006,6 +1469,12 @@ mod tests {
                     };
                     state.side_one.volatile_statuses = PokemonVolatileStatusSet::from_iter(attacking_volatile_status);
                     state.side_two.volatile_statuses = PokemonVolatileStatusSet::from_iter(defending_volatile_status);
+                    if state.side_one.volatile_statuses.contains(&PokemonVolatileStatus::FLASHFIRE) {
+                        state.side_one.get_active().ability = Abilities::FLASHFIRE;
+                    }
+                    if state.side_one.volatile_statuses.contains(&PokemonVolatileStatus::SLOWSTART) {
+                        state.side_one.get_active().ability = Abilities::SLOWSTART;
+                    }
 
                     choice.move_id = move_name;
                     choice.category = MoveCategory::Physical;

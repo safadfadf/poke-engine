@@ -1506,14 +1506,13 @@ impl Side {
     }
 }
 impl Side {
+    #[inline]
+    pub fn alive_pkmn_count(&self) -> i8 {
+        self.pokemon.into_iter().filter(|p| p.hp > 0).count() as i8
+    }
+
     pub fn visible_alive_pkmn(&self) -> i8 {
-        let mut count = 0;
-        for p in self.pokemon.into_iter() {
-            if p.hp > 0 {
-                count += 1;
-            }
-        }
-        count
+        self.alive_pkmn_count()
     }
     pub fn get_active(&mut self) -> &mut Pokemon {
         &mut self.pokemon[self.active_index]
@@ -1796,27 +1795,23 @@ impl State {
         }
     }
 
-    fn damage(&mut self, side_ref: &SideReference, amount: i16) {
-        let active = self.get_side(&side_ref).get_active();
-
-        active.hp -= amount;
-    }
-
-    fn heal(&mut self, side_ref: &SideReference, amount: i16) {
-        let active = self.get_side(&side_ref).get_active();
-
-        active.hp += amount;
-    }
-
-    fn maybe_record_active_faint(
+    fn apply_damage_with_faint_context(
         &mut self,
         side_ref: &SideReference,
-        target_index: PokemonIndex,
-        was_alive: bool,
+        amount: i16,
         faint_context: FaintContext,
     ) {
-        let is_now_fainted = self.get_side_immutable(side_ref).get_active_immutable().hp <= 0;
-        if was_alive && is_now_fainted {
+        let (target_index, should_record_faint) = {
+            let side = self.get_side(side_ref);
+            let target_index = side.active_index;
+            let active = side.get_active();
+            let was_alive = active.hp > 0;
+            active.hp -= amount;
+
+            (target_index, amount > 0 && was_alive && active.hp <= 0)
+        };
+
+        if should_record_faint && self.faint_event_can_affect_battle_result(side_ref) {
             self.faint_events.push(FaintEvent {
                 target_side: *side_ref,
                 target_index,
@@ -1828,73 +1823,80 @@ impl State {
         }
     }
 
-    fn pop_reversed_active_faint_event(
-        &mut self,
-        side_ref: &SideReference,
-        target_index: PokemonIndex,
-        was_fainted: bool,
-    ) {
-        let is_now_alive = self.get_side_immutable(side_ref).get_active_immutable().hp > 0;
-        if was_fainted && is_now_alive {
-            if self.faint_events.last().map_or(false, |event| {
-                event.target_side == *side_ref && event.target_index == target_index
-            }) {
-                self.faint_events.pop();
-            }
-        }
-    }
-
-    fn apply_damage_with_faint_context(
-        &mut self,
-        side_ref: &SideReference,
-        amount: i16,
-        faint_context: FaintContext,
-    ) {
-        let target_index = self.get_side_immutable(side_ref).active_index;
-        let was_alive = self.get_side_immutable(side_ref).get_active_immutable().hp > 0;
-
-        self.damage(side_ref, amount);
-
-        if amount > 0 {
-            self.maybe_record_active_faint(side_ref, target_index, was_alive, faint_context);
-        }
-    }
-
     fn apply_heal_with_faint_context(
         &mut self,
         side_ref: &SideReference,
         amount: i16,
         faint_context: FaintContext,
     ) {
-        let target_index = self.get_side_immutable(side_ref).active_index;
-        let was_alive = self.get_side_immutable(side_ref).get_active_immutable().hp > 0;
+        let (target_index, should_record_faint) = {
+            let side = self.get_side(side_ref);
+            let target_index = side.active_index;
+            let active = side.get_active();
+            let was_alive = active.hp > 0;
+            active.hp += amount;
 
-        self.heal(side_ref, amount);
+            (target_index, amount < 0 && was_alive && active.hp <= 0)
+        };
 
-        if amount < 0 {
-            self.maybe_record_active_faint(side_ref, target_index, was_alive, faint_context);
+        if should_record_faint && self.faint_event_can_affect_battle_result(side_ref) {
+            self.faint_events.push(FaintEvent {
+                target_side: *side_ref,
+                target_index,
+                source_side: faint_context.source_side,
+                source_index: faint_context.source_index,
+                cause: faint_context.cause,
+                effect: faint_context.effect,
+            });
         }
     }
 
+    #[inline]
+    fn faint_event_can_affect_battle_result(&self, side_ref: &SideReference) -> bool {
+        self.get_side_immutable(side_ref).alive_pkmn_count() == 0
+            && self
+                .get_side_immutable(&side_ref.get_other_side())
+                .alive_pkmn_count()
+                <= 1
+    }
+
     fn reverse_damage_with_faint_context(&mut self, side_ref: &SideReference, amount: i16) {
-        let target_index = self.get_side_immutable(side_ref).active_index;
-        let was_fainted = self.get_side_immutable(side_ref).get_active_immutable().hp <= 0;
+        let (target_index, should_pop_faint) = {
+            let side = self.get_side(side_ref);
+            let target_index = side.active_index;
+            let active = side.get_active();
+            let was_fainted = active.hp <= 0;
+            active.hp += amount;
 
-        self.heal(side_ref, amount);
+            (target_index, amount > 0 && was_fainted && active.hp > 0)
+        };
 
-        if amount > 0 {
-            self.pop_reversed_active_faint_event(side_ref, target_index, was_fainted);
+        if should_pop_faint
+            && self.faint_events.last().map_or(false, |event| {
+                event.target_side == *side_ref && event.target_index == target_index
+            })
+        {
+            self.faint_events.pop();
         }
     }
 
     fn reverse_heal_with_faint_context(&mut self, side_ref: &SideReference, amount: i16) {
-        let target_index = self.get_side_immutable(side_ref).active_index;
-        let was_fainted = self.get_side_immutable(side_ref).get_active_immutable().hp <= 0;
+        let (target_index, should_pop_faint) = {
+            let side = self.get_side(side_ref);
+            let target_index = side.active_index;
+            let active = side.get_active();
+            let was_fainted = active.hp <= 0;
+            active.hp -= amount;
 
-        self.damage(side_ref, amount);
+            (target_index, amount < 0 && was_fainted && active.hp > 0)
+        };
 
-        if amount < 0 {
-            self.pop_reversed_active_faint_event(side_ref, target_index, was_fainted);
+        if should_pop_faint
+            && self.faint_events.last().map_or(false, |event| {
+                event.target_side == *side_ref && event.target_index == target_index
+            })
+        {
+            self.faint_events.pop();
         }
     }
 
@@ -2925,9 +2927,28 @@ mod faint_event_tests {
         HealInstruction,
     };
 
+    fn make_active_pokemon_last_alive(state: &mut State, side_ref: SideReference) {
+        let side = state.get_side(&side_ref);
+        for index in [
+            PokemonIndex::P1,
+            PokemonIndex::P2,
+            PokemonIndex::P3,
+            PokemonIndex::P4,
+            PokemonIndex::P5,
+        ] {
+            side.pokemon[index].hp = 0;
+        }
+    }
+
+    fn make_both_active_pokemon_last_alive(state: &mut State) {
+        make_active_pokemon_last_alive(state, SideReference::SideOne);
+        make_active_pokemon_last_alive(state, SideReference::SideTwo);
+    }
+
     #[test]
     fn damage_records_and_reverses_faint_event() {
         let mut state = State::default();
+        make_both_active_pokemon_last_alive(&mut state);
         state.side_two.get_active().hp = 10;
 
         let instruction = Instruction::DamageWithFaintContext(DamageWithFaintContextInstruction {
@@ -2963,8 +2984,23 @@ mod faint_event_tests {
     }
 
     #[test]
+    fn mid_battle_faint_does_not_record_unused_faint_event() {
+        let mut state = State::default();
+        state.side_two.get_active().hp = 10;
+
+        state.apply_one_instruction(&Instruction::Damage(DamageInstruction {
+            side_ref: SideReference::SideTwo,
+            damage_amount: 10,
+        }));
+
+        assert_eq!(state.side_two.get_active_immutable().hp, 0);
+        assert!(state.faint_events.is_empty());
+    }
+
+    #[test]
     fn heal_does_not_remove_faint_event() {
         let mut state = State::default();
+        make_both_active_pokemon_last_alive(&mut state);
         state.side_two.get_active().hp = 10;
 
         let damage = Instruction::Damage(DamageInstruction {
@@ -2987,6 +3023,7 @@ mod faint_event_tests {
     #[test]
     fn negative_heal_records_and_reverses_faint_event_without_changing_instruction_shape() {
         let mut state = State::default();
+        make_both_active_pokemon_last_alive(&mut state);
         state.side_one.get_active().hp = 10;
 
         let instruction = Instruction::Heal(HealInstruction {
@@ -3113,6 +3150,7 @@ mod faint_event_tests {
     #[test]
     fn state_serialization_does_not_include_faint_events() {
         let mut state = State::default();
+        make_both_active_pokemon_last_alive(&mut state);
         let before = state.serialize();
 
         state.side_two.get_active().hp = 1;

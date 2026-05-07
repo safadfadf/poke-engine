@@ -867,20 +867,16 @@ pub fn ability_after_damage_hit(
     damage_dealt: i16,
     instructions: &mut StateInstructions,
 ) {
-    let active_ability_is_suppressed = state.active_ability_is_suppressed(side_ref);
-    let defending_ability_is_suppressed =
-        state.active_ability_is_suppressed(&side_ref.get_other_side());
-    let active_item_is_active = state.active_item_is_active(side_ref);
-    let defending_item_is_active = state.active_item_is_active(&side_ref.get_other_side());
-    let defending_item_can_be_removed =
-        state.active_item_can_be_removed(&side_ref.get_other_side());
+    let defending_side_ref = side_ref.get_other_side();
+    let active_context = state.active_context(side_ref);
+    let defending_context = state.active_context(&defending_side_ref);
+    let active_item_is_active = active_context.item_is_active;
+    let defending_item_is_active = defending_context.item_is_active;
     let (attacking_side, defending_side) = state.get_both_sides(side_ref);
     let active_pkmn = attacking_side.get_active();
-    let active_ability = if active_ability_is_suppressed {
-        Abilities::NONE
-    } else {
-        active_pkmn.ability
-    };
+    let active_ability = active_context.ability;
+    let defending_item_can_be_removed = defending_context.ability != Abilities::STICKYHOLD
+        && !defending_side.get_active_immutable().item_is_permanent();
     match active_ability {
         Abilities::BATTLEBOND => {
             if damage_dealt > 0 && defending_side.get_active_immutable().hp == 0 {
@@ -983,18 +979,17 @@ pub fn ability_after_damage_hit(
         }
         _ => {}
     }
-    let attacking_ability_can_be_changed = state.active_ability_can_be_changed(side_ref);
-    let defending_ability_can_be_changed =
-        state.active_ability_can_be_changed(&side_ref.get_other_side());
+    let active_change_context = state.active_context(side_ref);
+    let defending_change_context = state.active_context(&defending_side_ref);
     let (attacking_side, defending_side) = state.get_both_sides(side_ref);
     let defending_index = defending_side.active_index;
     let attacking_pkmn = attacking_side.get_active();
     let defending_pkmn = defending_side.get_active();
-    let defending_ability = if defending_ability_is_suppressed {
-        Abilities::NONE
-    } else {
-        defending_pkmn.ability
-    };
+    let attacking_ability_can_be_changed =
+        attacking_pkmn.hp != 0 && !active_change_context.has_effective_item(Items::ABILITYSHIELD);
+    let defending_ability_can_be_changed = defending_pkmn.hp != 0
+        && !defending_change_context.has_effective_item(Items::ABILITYSHIELD);
+    let defending_ability = defending_context.ability;
     match defending_ability {
         Abilities::MUMMY => {
             if choice.flags.contact
